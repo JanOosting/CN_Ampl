@@ -1,0 +1,231 @@
+---
+title: "CN.version_1"
+author: "w. plugge"
+date: "6/4/2015"
+output: html_document
+---
+
+
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100,warning=FALSE}
+# Normalisation of overlapping genomic regions within amplicons. Coverage is divided by the # over amplicons overlapping that region.
+# The "normalized"values are uncluded in determining the median value of an amplicon.
+# Subsequently, the average median within a sample is calculated and used to normalize the median values 
+# (Median values are divided by the average median value of a sample)
+# When the median value of an amplican is similar to the average amplicon median value, resulting values will be close to one.
+
+
+# Wendy Plugge
+# May 2015
+
+
+
+# ========================================================================================================================
+# CMD
+
+
+
+# I start by calculating the number of reads per bp in an amplicon using bedtools in the following way:
+
+# Wendy: File with amplicon regions
+#amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
+
+#for fileName in *.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d | 
+#  awk '{print $1"_"$2"_"$3,$8}' > per.base.coverage/"$output"; done;
+
+
+# =============================================================================================================================
+# R 
+
+# packages required 
+library(grid)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Next, I join the counts of all the samples in an experiment in a single table, first we make a list containing the paths of files
+# The resulting file has the following structure:
+# amplicon                   sample1 sample2
+# 10_89624270_89624359    140    144  
+
+
+# List the coverage files including file paths (used to read the tables)
+cov.files=list.files(path ="/home/wplugge/BAM.files/per.base.coverage", pattern =".cov", full.names = TRUE)
+
+# List the coverage files without file paths (used to rename the columns of the resulting table)
+cov.colName=list.files(path ="/home/wplugge/BAM.files/per.base.coverage", pattern =".cov", full.names = FALSE)
+
+# Read the first coverage file and add the corresponding data from the remaining files in the for loop
+cov.table=read.table(cov.files[1])
+colnames(cov.table)[1:2]=c("overlapped", gsub(".realign.cov", "", cov.colName[1]))
+
+for (i in 2:length(cov.files)){
+  loop.cov.table=read.table(cov.files[i])
+  if (median(loop.cov.table[,2]) >= 10){
+    cov.table=cbind(cov.table, loop.cov.table[,2]) # maybe change this to merge????
+    colnames(cov.table)[ncol(cov.table)]=gsub(".realign.cov", "", cov.colName[i])  
+  } else {
+    print(cov.colName[i]) # Add text, this sample has an median coverage < 10
+  }
+} 
+
+
+#cov.table is used to retrieve the final number of samples, so watch out with replacing these variables
+pool.coverage=cov.table  
+
+
+# Retrieve the start position of the amplicon (amplicon is indicated with 10_89624270_89624359 and we want 89624270)
+pool.coverage=cbind(pool.coverage, start_O=data.frame(do.call('rbind', strsplit(as.character(pool.coverage[,1]),'_',fixed=TRUE)))[2])
+colnames(pool.coverage)[ncol(pool.coverage)]="start_O" # Abreviation for start overlapping region (amplicons also have unique regions)
+
+# Add indexnumber for each amplicon. This number is used to calculate the per base genomic position
+# The minus 1 makes sure that the first position is the start position, meaning that the last position is not 
+# included in this analysis.
+pool.coverage=cbind(pool.coverage, index = sequence(rle(as.integer(pool.coverage$overlapped))$lengths)-1)
+
+# Calculate original genomic position (start position + index number (index starts from 0))
+pool.coverage$genomic.pos=as.integer(as.character(pool.coverage$start_O))+as.integer(as.character(pool.coverage$index))
+
+
+# Count how often a position occurs (== how many times an amplicon overlaps the same genomic position)
+count.occurence = rle(sort(pool.coverage$genomic.pos))
+pool.coverage$count.occurence = count.occurence[[1]][match( pool.coverage$genomic.pos , count.occurence[[2]])]
+
+
+# Ask Jan/Dina if this really works ( to me its feels alsof hier makkelijk fouten gebeuren)
+# Normalize counts of overlapping amplicons (= coverage genomic position (per base)/ number of amplicons overlapping this region)
+# Starts by column 2, first colomn is the id of nonOverlapped (which is actually the ID of overlapping region)
+# Normalized data is then combined with the addition columns of the table pool.coverage.
+norm.ampl.pool.coverage=pool.coverage[,2:length(cov.table)]/pool.coverage[,which(colnames(pool.coverage)=="count.occurence")]
+norm.ampl.pool.coverage=cbind(overlapped=pool.coverage[,1] , norm.ampl.pool.coverage) #, pool.coverage[c("start_O","index","genomic.pos","count.occurence")])
+
+
+
+
+# Coverage per amplicon per sample (= median count per amplicon) 
+# median of (base pairs) of amplicon divided by median sample (=median.Divided.medianSample) (step 1 article)
+Median_and_corrected_Coverage = function(p,ampliconName, main){
+  final = p %>%
+    gather(sample, reads,-overlapped) %>%
+    group_by(overlapped,sample) %>%
+    mutate(median = median(as.numeric(reads))) %>% # calculate the median reads per sample per amplicon
+    select(overlapped, sample, median) %>%       # rm original coverage values (column is not selected)
+    unique() %>%
+    inner_join(ampliconName, by="overlapped") %>% # get amplicon names
+    mutate(amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName), gene = sub("_.*", "", amplicon)) %>% # simplify amplicon name
+    select(amplicon, gene, sample, median) %>%  # select these columns from the table (others are removed)
+    filter(!grepl("^AME", gene)) %>% # rm ampl targeting X and Y chromosomes (not used for diagnosis, just sex determination)
+    group_by(sample) %>%
+    mutate(median.Divided.medianSample=median/median(as.numeric(median))) #1) median of ampl coverage 2) divide ampl median by sample median 
+  
+    # prevents reordering of x-axis and colors=> convert whole table to factor?????
+    final$amplicon = factor(final$amplicon, levels = final$amplicon)
+    final$gene = factor(final$gene, levels = final$gene) 
+      
+    # create plots of the corrected median values (median value of amplicon / average median value of sample)
+    a=ggplot(final, aes(x=amplicon, y=median.Divided.medianSample, color=gene)) + 
+    scale_y_continuous(limits=c(0,max(final$median.Divided.medianSample))) +  
+    geom_point( size = 3) + 
+    scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "black"),length.out=length(unique(final$gene)))) +
+    facet_wrap(~sample, ncol = 1)  +
+    theme_bw() +
+    theme(axis.text.x=element_text(angle=90, vjust = 0.6, size=8))
+    plot(a)
+  
+  return(final)
+}
+
+
+
+# File with overlapping amplicon sequences, unique regions and amplicon name
+ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt",head=F, sep=" ", as.is=T,
+                          col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
+
+
+
+
+print("median bp coverage amplicon divided by sample median")
+v=Median_and_corrected_Coverage(norm.ampl.pool.coverage,ampliconName, main=colnames(norm.ampl.pool.coverage))
+  
+
+
+
+
+
+# Select columns amplicon, sample and median.Divided.medianSample from the dataframe and use these to transform the dataframe, where 
+# amplicons are rows and samples columns. To use this code you first needed to use gather (which is used above)(if i want to make changes see example 
+# http ://rpackages.ianhowson.com/cran/tidyr/man/spread.html)
+# median.Divided.medianSample = (per base median of one amplicon ) / median amplicon coverage within sample
+
+median.coverage.ampl = v %>% select(amplicon, sample, median.Divided.medianSample) %>%  spread(sample, median.Divided.medianSample)
+
+
+# Step 2 from the article of Jan
+# Used value: median.Divided.medianSample (=median coverage of amplicon divided by median of sample -> 
+# this value is divided by the median coverage of one amplicon accros samples)
+# resulting values are close to one
+
+median.refinement.amplicons=function(c, n){
+
+  # exclude first column from analysis, first column contains amplicon names
+  c.temp=c[,2:ncol(c)]
+  
+    # If normal samples are present, use these for iterative median normalisation of amplicons accros samples
+  if (length(grep("_N$", colnames(c))) == 0){
+    # Median refinement, n iterations
+    print("No normals present as reference")
+    for (i in 1:n){
+      medRow=apply(c.temp, 1, median)
+      c.temp=sweep(c.temp, 1, FUN = "/", medRow)
+    }
+
+  } else {
+    print("Normals present as reference")
+    normals=grep("_N$", colnames(c.temp))
+    # Median refinement, n iterations
+    for (i in 1:n){
+      medRow=apply(c.temp[,normals], 1, median)
+      c.temp=sweep(c.temp, 1, FUN = "/", medRow)
+    }
+  }
+    
+
+  # Is this save enough?? I assumed that rows didnt get reordered during for loop
+  c=cbind(c[,1], c.temp)
+  colnames(c)[1]="amplicon"
+
+  # transform dataframe again
+  transformFrame=c %>% gather(samples, corrected, -amplicon) %>% mutate(gene = sub("_.*", "", amplicon))
+
+  # prevents reordering of x-axis => convert whole table to factor?????
+  # Warning message:
+  # In `levels<-`(`*tmp*`, value = if (nl == nL) as.character(labels) else paste0(labels,  : duplicated levels in factors are deprecated
+  #transformFrame$amplicon = factor(transformFrame$amplicon, levels = unique(sort(transformFrame$amplicon)))
+  #transformFrame$gene = factor(transformFrame$gene, levels = unique(sort(transformFrame$gene)))
+  
+  
+  transformFrame$amplicon = factor(transformFrame$amplicon, levels = transformFrame$amplicon)
+  transformFrame$gene = factor(transformFrame$gene, levels = transformFrame$gene)
+  
+  a=ggplot(transformFrame, aes(x=amplicon, y=corrected, color=gene)) + 
+  scale_y_continuous(limits=c(0,max(transformFrame$corrected))) +  # !! limits have to be adjusted automatically
+  geom_point( size = 3) + 
+  scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "black"),length.out=length(unique(transformFrame$gene))))+
+  facet_wrap(~samples, ncol = 1)  +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.6, size=8))
+  plot(a)
+  
+  return(transformFrame)
+}
+
+print("5 median refinement iterations using the median of amplicons accros samples")
+median.5.iterations=median.refinement.amplicons(median.coverage.ampl, 5)
+
+print("10 median refinement iterations using the median of amplicons accros samples")
+median.10.iterations=median.refinement.amplicons(median.coverage.ampl, 10)
+
+
+
+```
