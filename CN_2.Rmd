@@ -1,0 +1,366 @@
+---
+title: "CN_Version2"
+author: "w. plugge"
+date: "6/5/2015"
+output: html_document
+---
+
+-----------------------------------------------------
+ CN Analysis
+-----------------------------------------------------
+ Copy number variation analysis of amplicons  
+ 1) per base coverage of overlapping amplicon regions are divided by the number of overlapping amplicons  
+ 2) calculate per base median of an amplicon  
+ 3) divide amplicon value (as retrieved at step 2) by median sample  
+ 4) divide amplicon value (as retrieved at step 3) by the median amplicon value accross samples  
+ 5) median polishing -> repeat step 3 and 4  
+
+
+
+
+
+```{r, include=FALSE}
+
+#-----------------------------------------------------
+# Not R: BEDTOOLS COVERAGE
+#-----------------------------------------------------
+
+# Additional information about usage bedtools coverage => calculate per base coverage of all amplicons
+
+# commandline
+# File with amplicon regions
+# amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
+
+# for fileName in *.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d | awk '{print $1"_"$2"_"$3,$8}' > per.base.coverage/"$output"; done;
+
+
+```
+
+```{r, include=FALSE}
+#-----------------------------------------------------
+# Loading of required packages
+#-----------------------------------------------------
+
+library(grid)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+```
+
+
+PROCESSING FILES AND QUALITY CONTROL
+
+```{r, echo=FALSE, message=FALSE} 
+# message = false => no info about loading packages
+
+#-----------------------------------------------------
+# PROCESSING FILES AND QUALITY CONTROL
+
+# Processing files retrieved after using bedtools coverage. Files contain per base pair coverage of all amplicons. Data from these files (of all   samples) will be merged into one table, which has the following structure:
+# amplicon                sample1 sample2
+# 10_89624270_89624359    140     144  
+# Furthermore, this step includes a quality control step where samples with a median coverage lower than 10 are excluded from further analysis
+#-----------------------------------------------------
+
+# path to the directory where the output files of bedtools coverage are stored
+path.to.files = "/home/wplugge/BAM.files/per.base.coverage"
+
+# List the bedtools coverage files including file paths (used to read the tables) 
+cov.files = list.files(path = path.to.files, pattern =".cov", full.names = TRUE)
+
+# List the coverage files without file paths (used to rename the columns of the resulting table)
+cov.colName=list.files(path = path.to.files, pattern =".cov", full.names = FALSE)
+
+# Read the first coverage file and add the corresponding data from the remaining files in the for loop
+cov.table=read.table(cov.files[1])
+colnames(cov.table)[1:2]=c("overlapped", gsub(".realign.cov", "", cov.colName[1]))
+
+for (i in 2:length(cov.files)){
+  loop.cov.table=read.table(cov.files[i])
+  if (median(loop.cov.table[,2]) >= 10){
+    cov.table=cbind(cov.table, loop.cov.table[,2]) 
+    colnames(cov.table)[ncol(cov.table)]=gsub(".realign.cov", "", cov.colName[i])  
+  } else { # Quality control, remove samples that have a median coverage < 10
+    print(paste(cov.colName[i], "has an median coverage of", median(loop.cov.table[,2]),"and excluded from further analysis", paste=" " ))
+  }
+} 
+
+
+#cov.table is used to retrieve the final number of samples, so watch out with replacing these variables
+pool.coverage=cov.table  
+
+
+```
+
+--------------------------------------------------------------------------------------
+
+```{r, echo=FALSE, warnings=FALSE}
+
+#-----------------------------------------------------
+# ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 1: CALCULATE BP GENOMIC POSITIONS 
+# Since bedtools coverage doesn't provide the genomic position in the outputfiles, we calculate these using the start position of the amplicon and their assigned index number 
+#-----------------------------------------------------
+
+
+# Retrieve the start position of the amplicon (amplicon is indicated with 10_89624270_89624359 and we want 89624270)
+pool.coverage=cbind(pool.coverage, start_O=data.frame(do.call('rbind', strsplit(as.character(pool.coverage[,1]),'_',fixed=TRUE)))[2])
+colnames(pool.coverage)[ncol(pool.coverage)]="start_O" # Abreviation for start overlapping region (amplicons also have unique regions)
+
+# Add indexnumber for each amplicon. This number is used to calculate the per base genomic position. The minus 1 makes sure that the first position is the start position, meaning that the last position is not included in the analysis.
+pool.coverage=cbind(pool.coverage, index = sequence(rle(as.integer(pool.coverage$overlapped))$lengths)-1)
+
+# Calculate original genomic position (start position + index number (index starts from 0)) corresponding with coverage
+pool.coverage$genomic.pos=as.integer(as.character(pool.coverage$start_O))+as.integer(as.character(pool.coverage$index))
+
+```
+
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+#-----------------------------------------------------
+# ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 2: IDENTIFY OVERLAPPING AMPLICONS & DIVIDE COVERAGE BY NUMBER OF AMPLICONS OVERLAPPING THAT POSITION
+#-----------------------------------------------------
+
+
+# Count how often a position occurs (== how many times an amplicon overlaps the same genomic position)
+count.occurence = rle(sort(pool.coverage$genomic.pos))
+pool.coverage$count.occurence = count.occurence[[1]][match( pool.coverage$genomic.pos , count.occurence[[2]])]
+
+
+# Normalize counts of overlapping amplicons (= coverage genomic position (per base)/ number of amplicons overlapping this region)
+# Starts by column 2, first colomn is the id of nonOverlapped (which is actually the ID of overlapping region)
+# Normalized data is then combined with the additional columns of the table pool.coverage.
+norm.ampl.pool.coverage=pool.coverage[,2:length(cov.table)]/pool.coverage[,which(colnames(pool.coverage)=="count.occurence")]
+norm.ampl.pool.coverage=cbind(overlapped=pool.coverage[,1] , norm.ampl.pool.coverage) #, pool.coverage[c("start_O","index","genomic.pos","count.occurence")])
+
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+#-----------------------------------------------------
+# CALCULATE MEDIAN COVERAGE OF EACH AMPLICON
+# For each amplicon we have the per base coverage, during this step median coverage per amplicon is assigned to corresponding amplicon.  
+#-----------------------------------------------------
+
+
+# Function transforms dataframe and returns for each sample the median of the per base pair coverage associated with that amplicon.
+Bp_Median_Amplicon = function(p,ampliconName){
+  bp_ampl_median = p %>% gather(sample, reads,-overlapped) %>% # Transform dataframe
+      group_by(overlapped,sample) %>%                          # Group data by "overlapped" (=ampl ID) and sample
+      mutate(median = median(as.numeric(reads))) %>%           # Calculate median coverage of each ampl per sample
+      select(overlapped, sample, median) %>%                   # Rm original coverage values (that column is not selected)
+      unique() %>%                                             # Rm duplicated rows
+      inner_join(ampliconName, by="overlapped") %>%            # Attach amplicon names to table
+      mutate(amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName)) %>% # simplify amplicon name
+      select(amplicon, sample, median) %>%                     # select these columns from the table (others are removed)
+      filter(!grepl("^AME", amplicon)) %>%                     # Rm ampl targeting X and Y chr (not used for diagnosis, just sex determination)
+      spread(sample, median)                                   # Transform dataframe back to initial format
+  return(bp_ampl_median)
+}
+
+
+# File with overlapping amplicon sequences, unique regions and amplicon name
+#           overlapped        nonOverlapped     ampliconName
+# 10_89624139_89624269 10_89624139_89624219 PTEN_1_Pool1_M13
+# 10_89624220_89624359 10_89624270_89624359 PTEN_2_Pool2_M13
+
+ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt",head=F, sep=" ", as.is=T,
+                          col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
+
+
+
+# Call function Bp_Median_Amplicon
+bp_med_ampl = Bp_Median_Amplicon(norm.ampl.pool.coverage, ampliconName)
+
+
+
+
+```
+
+
+WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+#-----------------------------------------------------
+# WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
+# This chunk contains two functions, one for within sample normalization of amplicons and one for between sample normalization
+#-----------------------------------------------------
+
+
+# Function for within sample normalisation of amplicons. All amplicons of one sample are divided by the median coverage of that sample.
+Ampl_within_sample_normalization=function(df){
+  df.temp=df[,(which(colnames(df)=="amplicon")+1):ncol(df)] # Select only columns with (normalized) coverage values
+  medCol=apply(df.temp, 2, median)                                   # Calculate median "coverage" within sample (on columns)
+  df.temp=sweep(df.temp, 2, FUN = "/", medCol)                       # Divide all values of one sample by the median of that sample (on columns)
+  df=cbind(df[,which(colnames(df)=="amplicon")], df.temp)            # Combine the amplicon column and adjusted coverage values into one table
+  colnames(df)[1]="amplicon"                                         # (The last two steps returns a complete table back)
+  return(df)
+}
+
+
+
+
+
+
+# Function for between sample normalisation of amplicons. 
+Ampl_between_sample_normalization=function(df, sample_sheet){
+  df.temp=df[,(which(colnames(df)=="amplicon")+1):ncol(df)]  # Select only columns with (normalized) coverage values
+  
+  if (length(which(sample_sheet$V2=="Normal"))==0){        # In case where no control samples (normals) are present, divide amplicon values by the 
+                                                          # median of that particular amplicon accross all samples
+      medRow=apply(df.temp, 1, median)                    # Calculate median "coverage" between samples (on rows)
+      df.temp=sweep(df.temp, 1, FUN = "/", medRow)        # Divide amplicon coverage by the median coverage accros all samples of that amplicon
+      
+  } else {                                                # When normal samples are present, divide all amplicon values by the amplicon median  
+                                                          # value of normal samples
+      normals=sample_sheet[which(sample_sheet$V2=="Normal"),1] # Retrieve the names of normal samples.
+      medRow=apply(df.temp[,normals], 1, median)          # Calculate median "coverage" using only the normal samples (on rows)
+      df.temp=sweep(df.temp, 1, FUN = "/", medRow)        # Divide amplicon coverage by the median coverage of normal samples of that amplicon
+  }
+  
+  df=cbind(df[,which(colnames(df)=="amplicon")], df.temp) # Combine the amplicon column and adjusted coverage values into one table
+  colnames(df)[1]="amplicon"                              # (The last two steps returns a complete table back)  
+  return(df)
+}
+
+
+
+
+normalization.iteration=function(df, n, sampleSheet){
+  for (i in 1:n){
+    df=Ampl_within_sample_normalization(df)
+    df=Ampl_between_sample_normalization(df, sampleSheet)
+  }
+  return(df)
+}
+
+
+
+
+sample_sheet="/home/wplugge/CN_Ampl/Pool4_samplesheet.txt"  # tab seperated file; two columns: samplename <Tumor/Normal>
+sampleSheet=read.table(sample_sheet, sep="\t")  
+
+# This if statement is not necessary, it just indicated whether there are normal samples present or not
+if (length(which(sampleSheet$V2=="Normal"))==0){ 
+  print("No normal samples present")
+} else {
+  print("Normal samples present")
+}
+
+
+
+
+
+normalization.iteration_1=normalization.iteration(bp_med_ampl, 1, sampleSheet)
+normalization.iteration_5=normalization.iteration(bp_med_ampl, 5, sampleSheet)
+normalization.iteration_10=normalization.iteration(bp_med_ampl, 10, sampleSheet)
+
+
+
+```
+
+--------------------------------------------------------------------------------------
+
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+
+#-----------------------------------------------------
+# Temporary plotting function for data derived after applying the function "normalization.iteration"
+#-----------------------------------------------------
+
+normalization.iteration.plot=function(df){
+  df.plot.frame=df %>% gather(samples, corrected, -amplicon) %>% mutate(gene = sub("_.*", "", amplicon)) # transform dataframe for plotting
+    df.plot.frame$amplicon = factor(df.plot.frame$amplicon, levels = df.plot.frame$amplicon)
+  df.plot.frame$gene = factor(df.plot.frame$gene, levels = df.plot.frame$gene)
+  
+  a=ggplot(df.plot.frame, aes(x=amplicon, y=corrected, color=gene)) + 
+  scale_y_continuous(limits=c(0,max(df.plot.frame$corrected))) +  
+  geom_point( size = 3) + 
+  scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "black"),length.out=length(unique(df.plot.frame$gene))))+
+  facet_wrap(~samples, ncol = 1)  +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.6, size=8))
+  plot(a)
+}
+
+# Function is called in different chunks, which provides the possibilty to add some extra text between the tables....
+
+```
+
+1 iteration of within sample and between samples normalization
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+
+normalization.iteration.plot(normalization.iteration_1)
+```
+--------------------------------------------------------------------------------------
+-
+5 iterations of within sample and between samples normalization
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+
+normalization.iteration.plot(normalization.iteration_5)
+```
+--------------------------------------------------------------------------------------
+
+10 iterations of within sample and between samples normalization
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+
+normalization.iteration.plot(normalization.iteration_10)
+
+
+```
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+
+
+
+average.stdev.after.norm=function(df){
+  after.norm.test= df %>% gather(sample, reads, -amplicon)  %>%  # Transform dataframe
+          mutate(gene = sub("_.*", "", amplicon)) %>% 
+          group_by(sample, gene) %>%                          # Group data by sample
+          mutate(stdev = sd(as.numeric(reads), na.rm=TRUE)) %>%           # Calculate median coverage of each ampl per sample
+          select(sample, gene, stdev)  %>% 
+          unique() %>% 
+          group_by(sample) %>% 
+          mutate(average.stdev=mean(as.numeric(stdev), na.rm=TRUE)) %>%
+          select(sample, average.stdev)%>% 
+          unique()
+  return(after.norm.test)
+}
+
+normalization.iteration_1.stdev=average.stdev.after.norm(normalization.iteration_1)
+normalization.iteration_5.stdev=average.stdev.after.norm(normalization.iteration_5)
+normalization.iteration_10.stdev=average.stdev.after.norm(normalization.iteration_10)
+
+
+all.samples=cbind(normalization.iteration_1.stdev, normalization.iteration_5.stdev[,2], normalization.iteration_10.stdev[,2])
+colnames(all.samples)=c("sample","avg.stdev.1", "avg.stdev.5", "avg.stdev.10" )
+```
+
