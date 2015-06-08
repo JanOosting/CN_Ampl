@@ -5,49 +5,39 @@ date: "6/5/2015"
 output: html_document
 ---
 
------------------------------------------------------
- CN Analysis
------------------------------------------------------
- Copy number variation analysis of amplicons  
- 1) per base coverage of overlapping amplicon regions are divided by the number of overlapping amplicons  
- 2) calculate per base median of an amplicon  
- 3) divide amplicon value (as retrieved at step 2) by median sample  
- 4) divide amplicon value (as retrieved at step 3) by the median amplicon value accross samples  
- 5) median polishing -> repeat step 3 and 4  
-
-
-
-
-
-```{r, include=FALSE}
-
-#-----------------------------------------------------
-# Not R: BEDTOOLS COVERAGE
-#-----------------------------------------------------
-
-# Additional information about usage bedtools coverage => calculate per base coverage of all amplicons
-
-# commandline
-# File with amplicon regions
-# amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
-
-# for fileName in *.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d | awk '{print $1"_"$2"_"$3,$8}' > per.base.coverage/"$output"; done;
-
-
-```
-
-```{r, include=FALSE}
-#-----------------------------------------------------
-# Loading of required packages
-#-----------------------------------------------------
-
+```{r setup, echo=FALSE, message=FALSE}
+require(knitr)
+opts_knit$set(root.dir = '/home/wplugge/BAM.files/')
 library(grid)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-
-
 ```
+
+-----------------------------------------------------
+ CN Analysis
+-----------------------------------------------------
+Copy number variation analysis of amplicons    
+1) per base coverage of overlapping amplicon regions are divided by the number of overlapping amplicons     
+2) calculate per base median of an amplicon       
+3) divide amplicon value (as retrieved at step 2) by median sample      
+4) divide amplicon value (as retrieved at step 3) by the median amplicon value accross samples       
+5) median polishing -> repeat step 3 and 4        
+
+
+
+
+Using bedtools calculate per base coverage of all amplicons   
+
+```{r computeCoverage, echo=FALSE}
+# File with amplicon regions
+# amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
+
+if(!dir.exists("per.base.coverage")) {
+system('amplFile=/home/wplugge/sorted.unique.complete.PolypSeq-withAMPL.bed; mkdir per.base.coverage; for fileName in *.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d |  awk \'{print $1"_"$2"_"$3,$8}\' > per.base.coverage/"$output"; done;')
+}
+```
+
 
 
 PROCESSING FILES AND QUALITY CONTROL
