@@ -6,6 +6,7 @@ output: html_document
 ---
 
 ```{r setup, echo=FALSE, message=FALSE}
+# message = false => no info about loading packages
 require(knitr)
 opts_knit$set(root.dir = '/home/wplugge/BAM.files/')
 library(grid)
@@ -42,8 +43,7 @@ system('amplFile=/home/wplugge/sorted.unique.complete.PolypSeq-withAMPL.bed; mkd
 
 PROCESSING FILES AND QUALITY CONTROL
 
-```{r, echo=FALSE, message=FALSE} 
-# message = false => no info about loading packages
+```{r process_bedtools_coverage_output, echo=FALSE, message=FALSE} 
 
 #-----------------------------------------------------
 # PROCESSING FILES AND QUALITY CONTROL
@@ -55,7 +55,7 @@ PROCESSING FILES AND QUALITY CONTROL
 #-----------------------------------------------------
 
 # path to the directory where the output files of bedtools coverage are stored
-path.to.files = "/home/wplugge/BAM.files/per.base.coverage"
+path.to.files = "/home/wplugge/BAM.files/per.base.coverage"   # The whole path thing is not working in the new way (root.dir)
 
 # List the bedtools coverage files including file paths (used to read the tables) 
 cov.files = list.files(path = path.to.files, pattern =".cov", full.names = TRUE)
@@ -86,7 +86,7 @@ pool.coverage=cov.table
 
 --------------------------------------------------------------------------------------
 
-```{r, echo=FALSE, warnings=FALSE}
+```{r recalculate_bp_genomic_positions, echo=FALSE, warnings=FALSE}
 
 #-----------------------------------------------------
 # ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 1: CALCULATE BP GENOMIC POSITIONS 
@@ -109,12 +109,11 @@ pool.coverage$genomic.pos=as.integer(as.character(pool.coverage$start_O))+as.int
 
 
 
-```{r, echo=FALSE, warning=FALSE}
+```{r adjust_coverage_overlapping_amplicons, echo=FALSE, warning=FALSE}
 
 #-----------------------------------------------------
 # ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 2: IDENTIFY OVERLAPPING AMPLICONS & DIVIDE COVERAGE BY NUMBER OF AMPLICONS OVERLAPPING THAT POSITION
 #-----------------------------------------------------
-
 
 # Count how often a position occurs (== how many times an amplicon overlaps the same genomic position)
 count.occurence = rle(sort(pool.coverage$genomic.pos))
@@ -130,13 +129,12 @@ norm.ampl.pool.coverage=cbind(overlapped=pool.coverage[,1] , norm.ampl.pool.cove
 ```
 
 
-```{r, echo=FALSE, warning=FALSE}
+```{r median_amplicon, echo=FALSE, warning=FALSE}
 
 #-----------------------------------------------------
 # CALCULATE MEDIAN COVERAGE OF EACH AMPLICON
 # For each amplicon we have the per base coverage, during this step median coverage per amplicon is assigned to corresponding amplicon.  
 #-----------------------------------------------------
-
 
 # Function transforms dataframe and returns for each sample the median of the per base pair coverage associated with that amplicon.
 Bp_Median_Amplicon = function(p,ampliconName){
@@ -159,16 +157,54 @@ Bp_Median_Amplicon = function(p,ampliconName){
 # 10_89624139_89624269 10_89624139_89624219 PTEN_1_Pool1_M13
 # 10_89624220_89624359 10_89624270_89624359 PTEN_2_Pool2_M13
 
-ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt",head=F, sep=" ", as.is=T,
-                          col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
+ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt", head=F, sep=" ", as.is=T, col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
 
 
 
 # Call function Bp_Median_Amplicon
 bp_med_ampl = Bp_Median_Amplicon(norm.ampl.pool.coverage, ampliconName)
 
+# Store the order of amplicons (later used to restore order of df for plotting)
+ampl.order=bp_med_ampl[,2]
 
 
+```
+
+
+
+
+```{r amplicon_primer_pool_table, echo=FALSE, warning=FALSE}
+
+# create amplicon primer pool table
+
+# Create a new table from the last colomn from the variable "ampliconName" (a file containing a table, see above)
+
+# split the final column from the file in a new table ( this should be done in a nicer way though...)
+amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName$ampliconName)
+amplicon = sub("(^.*)_.*_.*", "\\1", amplicon) # rs genes have different layout
+ampliconPool= sub("^.*_.*_(.*)_.*", "\\1", ampliconName$ampliconName)
+ampliconPool= sub("^.*_(.*)_.*", "\\1", ampliconPool)
+ampliconPool=sub("Pool", "p", ampliconPool) # different layout from pool, only keep pool number
+ampliconPool=sub("p", "", ampliconPool)
+ampliconPool=cbind(amplicon, ampliconPool)
+
+
+```
+
+
+
+```{r split.df.based.on.primer.pool, echo=FALSE, warning=FALSE}
+
+
+# Merge median amplicon values with pool information of that amplicon ( 1 or 2) and create for each pool their own table
+
+bp_med_ampl=merge(bp_med_ampl, ampliconPool, by="amplicon")
+bp_med_ampl$overlapped=NULL
+bp_med_ampl_P1=bp_med_ampl[which(bp_med_ampl$ampliconPool=="1"),]
+bp_med_ampl_P2=bp_med_ampl[which(bp_med_ampl$ampliconPool=="2"),]
+
+
+# Maybe write if else statement here, when no different primer pools are present!!!!!!!!!! use e.g (length(unique(sort(ampliconPool[,2]))))
 
 ```
 
@@ -176,17 +212,16 @@ bp_med_ampl = Bp_Median_Amplicon(norm.ampl.pool.coverage, ampliconName)
 WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
 
 
-```{r, echo=FALSE, warning=FALSE}
+```{r within_sample_normalization, echo=FALSE, warning=FALSE}
 
 #-----------------------------------------------------
-# WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
-# This chunk contains two functions, one for within sample normalization of amplicons and one for between sample normalization
+# WITHIN SAMPLE NORMALIZATION OF AMPLICONS
 #-----------------------------------------------------
 
 
 # Function for within sample normalisation of amplicons. All amplicons of one sample are divided by the median coverage of that sample.
 Ampl_within_sample_normalization=function(df){
-  df.temp=df[,(which(colnames(df)=="amplicon")+1):ncol(df)] # Select only columns with (normalized) coverage values
+  df.temp=df[,(which(colnames(df)=="amplicon")+1):ncol(df)]          # Select only columns with (normalized) coverage values
   medCol=apply(df.temp, 2, median)                                   # Calculate median "coverage" within sample (on columns)
   df.temp=sweep(df.temp, 2, FUN = "/", medCol)                       # Divide all values of one sample by the median of that sample (on columns)
   df=cbind(df[,which(colnames(df)=="amplicon")], df.temp)            # Combine the amplicon column and adjusted coverage values into one table
@@ -195,15 +230,29 @@ Ampl_within_sample_normalization=function(df){
 }
 
 
+within.bp_med_ampl_P1=Ampl_within_sample_normalization(bp_med_ampl_P1[-ncol(bp_med_ampl_P1)]) # exclude last column = primerpool number
+within.bp_med_ampl_P2=Ampl_within_sample_normalization(bp_med_ampl_P2[-ncol(bp_med_ampl_P2)]) # exclude last column = primerpool number
+within.combine_pool1_2=rbind(within.bp_med_ampl_P1, within.bp_med_ampl_P2)                    # combine primerpool 1 and 2 data frames 
+#within.combine_pool1_2=merge(within.combine_pool1_2, ampliconPool, by="amplicon")             # Attach primer pool numbers again
+
+within.combine_pool1_2=within.combine_pool1_2[match(ampl.order$amplicon,within.combine_pool1_2$amplicon),] # restore original order of df
+within.combine_pool1_2=na.omit(within.combine_pool1_2)                                                     # rm NAs
 
 
+```
 
+
+```{r between_samples_normalization, echo=FALSE, warning=FALSE}
+
+#-----------------------------------------------------
+# BETWEEN SAMPLES NORMALIZATION OF AMPLICONS
+#-----------------------------------------------------
 
 # Function for between sample normalisation of amplicons. 
 Ampl_between_sample_normalization=function(df, sample_sheet){
   df.temp=df[,(which(colnames(df)=="amplicon")+1):ncol(df)]  # Select only columns with (normalized) coverage values
   
-  if (length(which(sample_sheet$V2=="Normal"))==0){        # In case where no control samples (normals) are present, divide amplicon values by the 
+  if (length(which(sample_sheet$V2=="Normal"))==0){       # In case where no control samples (normals) are present, divide amplicon values by the 
                                                           # median of that particular amplicon accross all samples
       medRow=apply(df.temp, 1, median)                    # Calculate median "coverage" between samples (on rows)
       df.temp=sweep(df.temp, 1, FUN = "/", medRow)        # Divide amplicon coverage by the median coverage accros all samples of that amplicon
@@ -221,23 +270,11 @@ Ampl_between_sample_normalization=function(df, sample_sheet){
 }
 
 
+# Sample sheet data indicates which samples are derived from tumor and/or normal material
+# sample_sheet="/home/wplugge/CN_Ampl/Pool4_samplesheet.NoNormals.txt"  # tab seperated file; two columns: samplename <Tumor/Normal>
+sampleSheet=read.table("/home/wplugge/CN_Ampl/Pool4_samplesheet.NoNormals.txt", sep="\t") # tab seperated file; two columns: samplename <Tumor/Normal>
 
-
-normalization.iteration=function(df, n, sampleSheet){
-  for (i in 1:n){
-    df=Ampl_within_sample_normalization(df)
-    df=Ampl_between_sample_normalization(df, sampleSheet)
-  }
-  return(df)
-}
-
-
-
-
-sample_sheet="/home/wplugge/CN_Ampl/Pool4_samplesheet.txt"  # tab seperated file; two columns: samplename <Tumor/Normal>
-sampleSheet=read.table(sample_sheet, sep="\t")  
-
-# This if statement is not necessary, it just indicated whether there are normal samples present or not
+# This if statement is not necessary, it just prints whether there are normal samples present or not
 if (length(which(sampleSheet$V2=="Normal"))==0){ 
   print("No normal samples present")
 } else {
@@ -245,13 +282,54 @@ if (length(which(sampleSheet$V2=="Normal"))==0){
 }
 
 
+# Call the across normalization function
+across.within.combine_pool1_2=Ampl_between_sample_normalization(within.combine_pool1_2, sampleSheet)
+rownames(across.within.combine_pool1_2)=across.within.combine_pool1_2$amplicon # so after log10 transformation we still have the amplicon names
+
+# Log10 transform normalized data
+log10.normalized.data=log10(across.within.combine_pool1_2[,2:ncol(across.within.combine_pool1_2)]) #1st column = amplicon name => rm
 
 
 
-normalization.iteration_1=normalization.iteration(bp_med_ampl, 1, sampleSheet)
-normalization.iteration_5=normalization.iteration(bp_med_ampl, 5, sampleSheet)
-normalization.iteration_10=normalization.iteration(bp_med_ampl, 10, sampleSheet)
+````
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# The rest of the code was used in the previous analysis but currentlty not used/evaluated!!!
+
+
+```{r call_within_between_normalization_functions, echo=FALSE, warning=FALSE, eval=FALSE}
+
+# Function was used before we splitted the data in different primer pools.
+# Call the within sample and between samples normalization function. Normalization is done within a loop to repeat the normalization process n times
+#normalization.iteration=function(df, n, sampleSheet){
+#  for (i in 1:n){
+#    df=Ampl_within_sample_normalization(df)
+#    df=Ampl_between_sample_normalization(df, sampleSheet)
+#  }
+#  return(df)
+#}
+
+
+# Calling function (was used before data was separated based on primer pool)
+#normalization.iteration_1=normalization.iteration(bp_med_ampl, 1, sampleSheet)
+#normalization.iteration_5=normalization.iteration(bp_med_ampl, 5, sampleSheet)
+#normalization.iteration_10=normalization.iteration(bp_med_ampl, 10, sampleSheet)
 
 
 ```
@@ -260,7 +338,7 @@ normalization.iteration_10=normalization.iteration(bp_med_ampl, 10, sampleSheet)
 
 
 
-```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE, eval=FALSE}
 
 #-----------------------------------------------------
 # Temporary plotting function for data derived after applying the function "normalization.iteration"
@@ -285,50 +363,47 @@ normalization.iteration.plot=function(df){
 
 ```
 
-1 iteration of within sample and between samples normalization
 
 ```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
 
+#1 iteration of within sample and between samples normalization
 #-----------------------------------------------------
 # Call the temporary function normalization.iteration.plot
 #-----------------------------------------------------
 
 
-normalization.iteration.plot(normalization.iteration_1)
+#normalization.iteration.plot(normalization.iteration_1)
 ```
---------------------------------------------------------------------------------------
--
-5 iterations of within sample and between samples normalization
+
+
 
 ```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
-
+#5 iterations of within sample and between samples normalization
 #-----------------------------------------------------
 # Call the temporary function normalization.iteration.plot
 #-----------------------------------------------------
 
 
-normalization.iteration.plot(normalization.iteration_5)
+#normalization.iteration.plot(normalization.iteration_5)
 ```
---------------------------------------------------------------------------------------
 
-10 iterations of within sample and between samples normalization
 
 
 ```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
-
+#10 iterations of within sample and between samples normalization
 #-----------------------------------------------------
 # Call the temporary function normalization.iteration.plot
 #-----------------------------------------------------
 
 
-normalization.iteration.plot(normalization.iteration_10)
+#normalization.iteration.plot(normalization.iteration_10)
 
 
 ```
 
 
-```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
-
+```{r, echo=FALSE,warning=FALSE, eval=FALSE, eval=FALSE}
+# calculate average standard deviation or normalized data
 
 
 average.stdev.after.norm=function(df){
@@ -350,7 +425,129 @@ normalization.iteration_5.stdev=average.stdev.after.norm(normalization.iteration
 normalization.iteration_10.stdev=average.stdev.after.norm(normalization.iteration_10)
 
 
-all.samples=cbind(normalization.iteration_1.stdev, normalization.iteration_5.stdev[,2], normalization.iteration_10.stdev[,2])
-colnames(all.samples)=c("sample","avg.stdev.1", "avg.stdev.5", "avg.stdev.10" )
+
 ```
+
+
+
+
+
+```{r, echo=FALSE,warning=FALSE, eval=FALSE}
+
+# Step 3 of jans article (use all amplicons)
+
+# sample_sheet is mentioned above as well
+#sample_sheet="/home/wplugge/CN_Ampl/Pool4_samplesheet.txt"  # tab seperated file; two columns: samplename <Tumor/Normal>
+#sampleSheet=read.table(sample_sheet, sep="\t")  
+
+MAD.normalization=function(df, sample_sheet){
+  normalNames=sample_sheet[which(sample_sheet$V2=="Normal"),1] # Retrieve the names of normal samples.
+  if (length(normalNames) > 0){
+  
+  
+    normals=df[,normalNames]         
+
+  
+    # Within sample normalization
+    normals.medCol=apply(normals , 2, median)     # Calculate median "coverage" within sample (on columns)
+    normals=sweep(normals, 2, FUN = "/", normals.medCol) # Divide all values of one sample by the median of that sample
+
+    # across sample normalization
+    normals.medRow=apply(normals, 1, median) # Calculate median "coverage" using normal samples (rows)
+    normals=sweep(normals, 1, FUN = "/", normals.medRow) # Divide amplicon coverage by the median coverage of normal samples 
+
+    # attach the amplicon column to the normalized data
+    normals=cbind(df[,c("amplicon")],normals)
+    colnames(normals)[1]="amplicon"
+  } else {
+    normals=df
+  }
+
+  # Calculate MAD
+  normal.MAD=normals %>% 
+    gather(samples, norm.value, -amplicon) %>%
+    group_by(amplicon) %>%
+    mutate(ABS=abs(norm.value-1), MAD=median(ABS)) %>% 
+    select(amplicon, MAD) %>% 
+    unique()
+  
+  # Select the five amplicons with the lowest MAD (closest to zero)
+  calibration.ampl=normal.MAD[order(normal.MAD$MAD), ][1:5,]
+  print(calibration.ampl)
+  
+  # Extract these 5 amplicons from the original table (so you'll get n number of columns (based on the number of samples) and 6 rows (which includes the header line))
+  correcting.factor.table=df[df$amplicon %in% calibration.ampl$amplicon,]
+  correcting.factor=apply(correcting.factor.table[,-1], 2, median)       # Calculate median "coverage" within sample (on columns)
+  df.ampl.names=df[,1]
+  df=sweep(df[,-1], 2, FUN = "/", correcting.factor)     # Divide all values of one sample by the median of that sample
+  df=cbind(df.ampl.names, df)  
+  colnames(df)[1]="amplicon"
+  return(df)
+}
+
+
+
+
+norm.iteration_1.MAD  = MAD.normalization(normalization.iteration_1, sampleSheet)
+norm.iteration_5.MAD = MAD.normalization(normalization.iteration_5, sampleSheet)
+norm.iteration_10.MAD = MAD.normalization(normalization.iteration_10, sampleSheet)
+
+
+norm.iteration_1.MAD.stdev  = average.stdev.after.norm(norm.iteration_1.MAD)
+norm.iteration_5.MAD.stdev  = average.stdev.after.norm(norm.iteration_5.MAD)
+norm.iteration_10.MAD.stdev = average.stdev.after.norm(norm.iteration_10.MAD)
+  
+  
+ all.samples=cbind(normalization.iteration_1.stdev,  norm.iteration_1.MAD.stdev[,2], normalization.iteration_5.stdev[,2], norm.iteration_5.MAD.stdev[,2], normalization.iteration_10.stdev[,2], norm.iteration_10.MAD.stdev[,2])
+
+colnames(all.samples)=c("sample", "SD_1", "SD_1_MAD", "SD_5", "SD_5_MAD", "SD_10", "SD_10_MAD")
+```
+
+
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE, eval=FALSE}
+
+# 1 iteration of within sample and between samples normalization (using normal samples)
+
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+normalization.iteration.plot(norm.iteration_1.MAD)
+```
+--------------------------------------------------------------------------------------
+-
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE, eval=FALSE}
+
+# 5 iterations of within sample and between samples normalization (using normal samples, eval=FALSE)
+
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+
+normalization.iteration.plot(norm.iteration_5.MAD)
+```
+--------------------------------------------------------------------------------------
+
+
+
+
+```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE, eval=FALSE}
+
+# 10 iterations of within sample and between samples normalization (using normal samples)
+#-----------------------------------------------------
+# Call the temporary function normalization.iteration.plot
+#-----------------------------------------------------
+
+
+normalization.iteration.plot(norm.iteration_10.MAD)
+
+
+```
+
+
 
