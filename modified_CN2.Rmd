@@ -8,13 +8,20 @@ output: html_document
 ```{r setup, echo=FALSE, message=FALSE}
 # message = false => no info about loading packages
 require(knitr)
-opts_knit$set(root.dir = '/home/wplugge/BAM.files/')
+#opts_knit$set(root.dir = '/home/wplugge/BAM.files/')
+
+
 library(grid)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
 
 library(quantsmooth)
+
+
+# awk -v OFS='\t' '{gsub("CHP2_", "", $4)} {print $1, $2, $3, 0, $4}' CHP2-rmprimers.bed > primers.bed
+# bedtools sort -i primers.bed > sorted.primers.bed
+
 
 ```
 
@@ -37,17 +44,27 @@ Using bedtools calculate per base coverage of all amplicons
 # File with amplicon regions
 # amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
 
-if(!dir.exists("per.base.coverage")) {
-system('amplFile=/home/wplugge/sorted.unique.complete.PolypSeq-withAMPL.bed; mkdir per.base.coverage; for fileName in *.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d |  awk \'{print $1"_"$2"_"$3,$8}\' > per.base.coverage/"$output"; done;')
-}
+#if(!dir.exists("per.base.coverage")) {
+#system('amplFile=/home/wplugge/R/additional.pool/sorted.primers.bed; mkdir per.base.coverage; for fileName in /home/wplugge/R/additional.pool/433/test.1#.file/*.bam; do output=`echo "$fileName" | sed s/bam/cov/g`; echo "$output"; coverageBed -abam "$fileName" -b $amplFile -d |  awk \'{print $1"_"$2"_"$#3,$8}\' > per.base.coverage/"$output"; done;')
+#}
+
+
+
+
+
+
+# -v at awk is added, not similar as dinas code above
+#amplFile=/home/wplugge/R/additional.pool/primerPool.sorted.primers.bed; 
+#mkdir per.base.coverage; 
+#for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1"_"$2"_"$3,$5,$7}' >> base.coverage.panel_439.txt ; done;
 ```
 
 
 
-PROCESSING FILES AND QUALITY CONTROL
+
 
 ```{r process_bedtools_coverage_output, echo=FALSE, message=FALSE} 
-
+#PROCESSING FILES AND QUALITY CONTROL
 #-----------------------------------------------------
 # PROCESSING FILES AND QUALITY CONTROL
 
@@ -57,36 +74,27 @@ PROCESSING FILES AND QUALITY CONTROL
 # Furthermore, this step includes a quality control step where samples with a median coverage lower than 10 are excluded from further analysis
 #-----------------------------------------------------
 
-# path to the directory where the output files of bedtools coverage are stored
-path.to.files = "/home/wplugge/BAM.files/per.base.coverage"   # The whole path thing is not working in the new way (root.dir)
 
-# List the bedtools coverage files including file paths (used to read the tables) 
-cov.files = list.files(path = path.to.files, pattern =".cov", full.names = TRUE)
-
-# List the coverage files without file paths (used to rename the columns of the resulting table)
-cov.colName=list.files(path = path.to.files, pattern =".cov", full.names = FALSE)
-
-# Read the first coverage file and add the corresponding data from the remaining files in the for loop
-cov.table=read.table(cov.files[1])
-colnames(cov.table)[1:2]=c("overlapped", gsub(".realign.cov", "", cov.colName[1]))
-
-for (i in 2:length(cov.files)){
-  loop.cov.table=read.table(cov.files[i])
-  if (median(loop.cov.table[,2]) >= 10){
-    cov.table=cbind(cov.table, loop.cov.table[,2]) 
-    colnames(cov.table)[ncol(cov.table)]=gsub(".realign.cov", "", cov.colName[i])  
-  } else { # Quality control, remove samples that have a median coverage < 10
-    print(paste(cov.colName[i], "has an median coverage of", median(loop.cov.table[,2]),"and excluded from further analysis", paste=" " ))
-  }
-} 
+###!!!! Add cutoff value for samples!!!!!!!!!!!!!
 
 
-#cov.table is used to retrieve the final number of samples, so watch out with replacing these variables
+#input has to have this format:
+# sample -   genomic position -     ampl.name combined with pool -number coverage
+# 151110.bam chr1_42844195_42844317 rs7514030_p1                  886
 
-pool.coverage=cov.table[,2:ncol(cov.table)]+1 # Add 1 to al numbers (to be able to log transform the data)
-pool.coverage=cbind(cov.table[,1], pool.coverage)
 
-pool.coverage=cov.table
+outputFileTable="/home/wplugge/R/additional.pool/439/439_CNV_analysis.txt"
+pool.coverage=read.table("/home/wplugge/R/additional.pool/439/base.coverage.panel_439.txt")
+colnames(pool.coverage)=c("sample", "ampl.pos", "amplicon", "coverage")
+
+# Remove samples that have a sample median (of basepairs) less than 10. Sample name is not printed!!
+pool.coverage= pool.coverage %>% 
+  group_by(sample) %>% 
+  mutate(median=median(coverage)) %>% 
+  filter(median>10) %>% 
+  select(sample, ampl.pos, amplicon, coverage)
+pool.coverage$coverage=pool.coverage$coverage+1 # Add 1 to al numbers (to be able to log transform the data)
+
 ```
 
 --------------------------------------------------------------------------------------
@@ -100,11 +108,16 @@ pool.coverage=cov.table
 
 
 # Retrieve the start position of the amplicon (amplicon is indicated with 10_89624270_89624359 and we want 89624270)
-pool.coverage=cbind(pool.coverage, start_O=data.frame(do.call('rbind', strsplit(as.character(pool.coverage[,1]),'_',fixed=TRUE)))[2])
+# This step maybe altered at the step of bedtools. don't connect chr_start_stop
+pool.coverage=cbind(pool.coverage, start_O=data.frame(do.call('rbind', strsplit(as.character(pool.coverage$ampl.pos),'_',fixed=TRUE)))[2])
 colnames(pool.coverage)[ncol(pool.coverage)]="start_O" # Abreviation for start overlapping region (amplicons also have unique regions)
 
-# Add indexnumber for each amplicon. This number is used to calculate the per base genomic position. The minus 1 makes sure that the first position is the start position, meaning that the last position is not included in the analysis.
-pool.coverage=cbind(pool.coverage, index = sequence(rle(as.integer(pool.coverage$overlapped))$lengths)-1)
+
+
+# This will give errors in case of only one amplicon..... The index number changes for every amplicon group
+# Maybe adjust to index numbers of bedtools coverage...
+pool.coverage=cbind(pool.coverage, index = sequence(rle(as.integer(pool.coverage$ampl.pos))$lengths)-1)
+
 
 # Calculate original genomic position (start position + index number (index starts from 0)) corresponding with coverage
 pool.coverage$genomic.pos=as.integer(as.character(pool.coverage$start_O))+as.integer(as.character(pool.coverage$index))
@@ -120,21 +133,191 @@ pool.coverage$genomic.pos=as.integer(as.character(pool.coverage$start_O))+as.int
 # ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 2: IDENTIFY OVERLAPPING AMPLICONS & DIVIDE COVERAGE BY NUMBER OF AMPLICONS OVERLAPPING THAT POSITION
 #-----------------------------------------------------
 
-# Count how often a position occurs (== how many times an amplicon overlaps the same genomic position)
-count.occurence = rle(sort(pool.coverage$genomic.pos))
-pool.coverage$count.occurence = count.occurence[[1]][match( pool.coverage$genomic.pos , count.occurence[[2]])]
+# This code needs to be checked with overlapping amplicon regions!!!!!!!!!!!!!!!!!!
+
+pool.coverage = pool.coverage %>%  # group by sample and genomic position to count the occurence of each position. number of times a position occurs is 
+  group_by(sample, genomic.pos) %>%  # counted. Coverage per base pair position is divided by the number of times a position occured
+  mutate(count.occurence=n(), corr.coverage=coverage/count.occurence)  %>%   
+  group_by(sample, ampl.pos) %>%                          # Group data by sample and ampl.pos (=ampl-id of location ampl)
+  mutate(ampl.median = median(as.numeric(corr.coverage))) %>%         # Calculate median corrected coverage of each ampl per sample
+  select(sample, ampl.pos, amplicon, ampl.median) %>%                    # Rm original coverage values (that column is not selected)
+  unique() %>%                                             # Rm duplicated rows
+  #filter(!grepl("^AME", amplicon))
+  filter(!grepl("^rs", amplicon))
 
 
-# Normalize counts of overlapping amplicons (= coverage genomic position (per base)/ number of amplicons overlapping this region)
-# Starts by column 2, first colomn is the id of nonOverlapped (which is actually the ID of overlapping region)
-# Normalized data is then combined with the additional columns of the table pool.coverage.
-norm.ampl.pool.coverage=pool.coverage[,2:length(cov.table)]/pool.coverage[,which(colnames(pool.coverage)=="count.occurence")]
-norm.ampl.pool.coverage=cbind(overlapped=pool.coverage[,1] , norm.ampl.pool.coverage) #, pool.coverage[c("start_O","index","genomic.pos","count.occurence")])
+Within.Sample.Normalization=function(df){
+  df.table = df %>%
+  group_by(sample) %>%
+  mutate(sample.median=median(ampl.median), within.median.corr=ampl.median/sample.median) %>%
+  select(sample,ampl.pos,amplicon, within.median.corr)
+  return(df.table)
+}
+
+# Check how many primerpools were used for within sample normalization per primer pool
+# Check this part with multiple pools....!!!
+pool_nr = sub("^.*_.*(_.*)", "\\1", pool.coverage$amplicon)
+pool_nr = unique(sort(sub("^.*_(.*)", "\\1", pool_nr))) # X and Y genes give problems, thats why i put it in two lines
+
+if (length(pool_nr)==1){
+  print("one primerpool")
+  within.sample.normalization=Within.Sample.Normalization(pool.coverage)
+  
+} else if(length(pool_nr)>1) {
+  print("we still need to adjust this")
+  
+} else {
+  print("Something went wrong by determining the number of primer pools used in these samples")
+}
+
+
+
+
+
+#within.sample.normalization = pool.coverage %>%
+#  group_by(sample) %>%
+#  mutate(sample.median=median(ampl.median), within.median.corr=ampl.median/sample.median) %>%
+#  select(sample,ampl.pos,amplicon, within.median.corr)
+
+initial.between.sample.normalization = within.sample.normalization %>%
+  group_by(amplicon) %>%
+  mutate(between.median=median(within.median.corr), between.median.corr=within.median.corr/between.median)  %>%
+  select(sample,ampl.pos,amplicon, within.median.corr, between.median.corr )
+
+
+#===========================================================
+
+avg_stdev = initial.between.sample.normalization %>% 
+  mutate(gene = sub("_.*", "", amplicon)) %>% # Matbe put this step somewhere above!!!!!!!!!!!!!!!!!!!!!
+  group_by(sample, gene) %>% 
+  mutate(stdev.gene = sd(as.numeric(between.median.corr), na.rm=TRUE)) %>% 
+  group_by(sample) %>%
+  mutate(average.stdev=mean(as.numeric(stdev.gene), na.rm=TRUE)) %>%
+  select(sample, average.stdev) %>% 
+  unique()
+
+# samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median
+# coverage between samples of that amplicon. These samples still will be normalized using the selected median
+sample.ex.norm=avg_stdev[which(avg_stdev$average.stdev >0.3),] # I know i can do this at the step above using filter, but for now i wanted to keep the whole list containing stdev for all samples
+print("The following samples were excluded:")
+print(sample.ex.norm)
+
+# Calculate the median of each amplicon of samples with a stdev <= 0.3. This median is used to do a between sample normalization of
+# amplicons
+amplicon.median = within.sample.normalization %>% 
+  filter(!sample %in% sample.ex.norm$sample) %>%  # Exclude samples with a stdev < 0.3 (stored in sample.ex.norm)
+  group_by(amplicon) %>%
+  mutate(between.median=median(within.median.corr))  %>%
+  select(amplicon,between.median) %>%
+  unique()
+
+# Creating an unique id that will be used to restore the original order of the df after merging. Order is stored in "Order_ID"
+within.sample.normalization$order_ID=paste(within.sample.normalization$sample, within.sample.normalization$amplicon, sep="_")
+order_ID=as.data.frame(within.sample.normalization$order_ID)
+colnames(order_ID)="order_ID"
+
+# merge the median of amplicons between samples with the complete df. In the following step amplicon values are divided by this median. 
+within.sample.normalization=merge(within.sample.normalization, amplicon.median, by="amplicon")
+
+# restore original order of df
+within.sample.normalization=within.sample.normalization[match(order_ID$order_ID, within.sample.normalization$order_ID),] 
+
+
+
+between.sample.normalization = within.sample.normalization %>%
+  mutate(between.median.corr=within.median.corr/between.median)  %>%
+  select(sample,ampl.pos,amplicon, within.median.corr, between.median.corr)
+
+#==========================================================================================
+# use this further along for plotting...
+#SD$pool="all pools"
+#plot(density(as.double(as.character(SD$average.stdev))), main="stdev pool all pools", xlab="average stdev sample")
+
+
+
+#===========================================================================================
+
+
+# log10 transformation
+between.sample.normalization$log10=log10(between.sample.normalization$between.median.corr) 
+
+# quanthsmooth
+data.smoothing= between.sample.normalization %>% 
+    mutate(gene = sub("_.*", "", amplicon)) %>%  # extract gene name from amplicon name
+    group_by(sample, gene) %>%
+    mutate(quant.smooth=quantsmooth(log10))
+
+data.smoothing$order_id=paste(data.smoothing$sample, data.smoothing$amplicon, sep="_") # order id
+ds_order=as.data.frame(data.smoothing$order_id)
+colnames(ds_order)="order_id"
+
+# CI of smoothed log 10 data
+###CI = data.smoothing %>% group_by(gene) %>% 
+###  mutate(mn=mean(as.double(quant.smooth)),sd=sd(as.double(quant.smooth)), LCI=mn+qnorm(0.025)*sd, UCI=mn+qnorm(0.975)*sd, ampl.new=sub("_p.*", "", amplicon))
+  #mutate(mn=mean(as.double(quant.smooth)),sd=sd(as.double(quant.smooth)), LCI=mn+qnorm(0.005)*sd, UCI=mn+qnorm(0.995)*sd, ampl.new=sub("_p.*", "", amplicon))
+
+
+# CI is created without using data of samples with a stdev > 3.0; returns a df of genes with corresponding confidence interval
+CI_interval = data.smoothing %>% 
+  filter(!sample %in% sample.ex.norm$sample) %>% # samples with stdev > 3.0 are removed 
+  group_by(gene) %>% 
+  mutate(q_median=median(quant.smooth),q_mad=mad(quant.smooth), LCI=q_median+qnorm(0.005)*q_mad, UCI=q_median+qnorm(0.995)*q_mad, 
+         ampl.new=sub("_p.*", "", amplicon)) %>% 
+  select(gene, LCI, UCI) %>% 
+  unique()
+
+
+CI = merge(data.smoothing, CI_interval, by="gene") # Merge original df (all samples) with corresponding CI and restore original order
+CI = CI[match(ds_order$order_id, CI$order_id),] 
+
+
+# Add additional column for samples with a stdev higher or lower than the set threshold.
+CI$color_stdev = ifelse(CI$sample %in% sample.ex.norm$sample,"high.stdev", "low.stdev")
+
+
+# Create table that provides overview of which amplicons are associated with deleted/amplified (partial) genes
+CNV.table=CI %>% 
+  ungroup() %>%  # Actions above kept data grouped, not required now
+  mutate(CNV = ifelse(quant.smooth < LCI, "deletion", ifelse(quant.smooth > UCI, "amplification","NA"))) %>%
+  filter(!CNV=="NA") %>%
+  select(sample, amplicon, quant.smooth, LCI, UCI, CNV)
+
+write.table(CNV.table, outputFileTable, sep="\t", quote=FALSE, row.names=FALSE )
 
 ```
 
 
-```{r median_amplicon, echo=FALSE, warning=FALSE}
+Only samples with a stdev < 0.3 were included in determining the confidence interval per gene. 
+```{r, echo=FALSE, fig.width=15, fig.height=20, warning=FALSE}
+
+# remove pool number from amplicon name (maybe do that more above??) (plotting needs group_by??)
+CI=CI %>% group_by(sample) %>% 
+  mutate(ampl.new=sub("_p.*", "", amplicon))
+
+CI$ampl.new = factor(CI$ampl.new, levels = CI$ampl.new) # do no reorder labels
+CI$gene = factor(CI$gene, levels = CI$gene)
+
+
+
+a=ggplot(CI, aes(x=ampl.new, y=quant.smooth , color=gene, 
+                                                 shape=ifelse((quant.smooth >= LCI & quant.smooth <= UCI),"A", "B"))) + 
+
+  
+  #geom_rect(aes(fill = color_stdev), color=c("red", "purple"), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 1) +
+  geom_point(size=1) +
+  scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "orange"),length.out=length(unique(CI$gene))), guide=FALSE) +
+  scale_shape_manual(guide=FALSE, values=c(16, 8)) +   #define shapes
+  facet_wrap(~sample, ncol = 1)  + #, scales="free_x")
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90, vjust = 1, size=6))
+plot(a)
+
+
+
+```
+
+
+```{r median_amplicon, echo=FALSE, warning=FALSE, eval=FALSE}
 
 #-----------------------------------------------------
 # CALCULATE MEDIAN COVERAGE OF EACH AMPLICON
@@ -142,19 +325,19 @@ norm.ampl.pool.coverage=cbind(overlapped=pool.coverage[,1] , norm.ampl.pool.cove
 #-----------------------------------------------------
 
 # Function transforms dataframe and returns for each sample the median of the per base pair coverage associated with that amplicon.
-Bp_Median_Amplicon = function(p,ampliconName){
-  bp_ampl_median = p %>% gather(sample, reads,-overlapped) %>% # Transform dataframe
-      group_by(overlapped,sample) %>%                          # Group data by "overlapped" (=ampl ID) and sample
-      mutate(median = median(as.numeric(reads))) %>%           # Calculate median coverage of each ampl per sample
-      select(overlapped, sample, median) %>%                   # Rm original coverage values (that column is not selected)
-      unique() %>%                                             # Rm duplicated rows
-      inner_join(ampliconName, by="overlapped") %>%            # Attach amplicon names to table
-      mutate(amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName)) %>% # simplify amplicon name
-      select(amplicon, sample, median) %>%                     # select these columns from the table (others are removed)
-      filter(!grepl("^AME", amplicon)) %>%                     # Rm ampl targeting X and Y chr (not used for diagnosis, just sex determination)
-      spread(sample, median)                                   # Transform dataframe back to initial format
-  return(bp_ampl_median)
-}
+#*Bp_Median_Amplicon = function(p,ampliconName){
+#*  bp_ampl_median = p %>% gather(sample, reads,-overlapped) %>% # Transform dataframe
+#*      group_by(overlapped,sample) %>%                          # Group data by "overlapped" (=ampl ID) and sample
+#*      mutate(median = median(as.numeric(reads))) %>%           # Calculate median coverage of each ampl per sample
+#*      select(overlapped, sample, median) %>%                   # Rm original coverage values (that column is not selected)
+#*      unique() %>%                                             # Rm duplicated rows
+#*      inner_join(ampliconName, by="overlapped") %>%            # Attach amplicon names to table
+#*      mutate(amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName)) %>% # simplify amplicon name
+#*      select(amplicon, sample, median) %>%                     # select these columns from the table (others are removed)
+#*      filter(!grepl("^AME", amplicon)) %>%                     # Rm ampl targeting X and Y chr (not used for diagnosis, just sex determination)
+#*      spread(sample, median)                                   # Transform dataframe back to initial format
+#*  return(bp_ampl_median)
+#*}
 
 
 # File with overlapping amplicon sequences, unique regions and amplicon name
@@ -162,12 +345,12 @@ Bp_Median_Amplicon = function(p,ampliconName){
 # 10_89624139_89624269 10_89624139_89624219 PTEN_1_Pool1_M13
 # 10_89624220_89624359 10_89624270_89624359 PTEN_2_Pool2_M13
 
-ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt", head=F, sep=" ", as.is=T, col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
+#*ampliconName = read.table("/home/wplugge/Dina_analysis/PolypSeq_NonOverlapping-AmpliconName.txt", head=F, sep=" ", as.is=T, col.names= c( "overlapped", "nonOverlapped", "ampliconName"))
 
 
 
 # Call function Bp_Median_Amplicon
-bp_med_ampl = Bp_Median_Amplicon(norm.ampl.pool.coverage, ampliconName)
+#*bp_med_ampl = Bp_Median_Amplicon(norm.ampl.pool.coverage, ampliconName)
 
 # Store the order of amplicons (later used to restore order of df for plotting)
 ampl.order=bp_med_ampl[,2]
@@ -178,47 +361,53 @@ ampl.order=bp_med_ampl[,2]
 
 
 
-```{r amplicon_primer_pool_table, echo=FALSE, warning=FALSE}
+```{r amplicon_primer_pool_table, echo=FALSE, warning=FALSE, eval=FALSE}
 
 # create amplicon primer pool table
 
 # Create a new table from the last colomn from the variable "ampliconName" (a file containing a table, see above)
-
-# split the final column from the file in a new table ( this should be done in a nicer way though...)
-amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName$ampliconName)
-amplicon = sub("(^.*)_.*_.*", "\\1", amplicon) # rs genes have different layout
-ampliconPool= sub("^.*_.*_(.*)_.*", "\\1", ampliconName$ampliconName)
-ampliconPool= sub("^.*_(.*)_.*", "\\1", ampliconPool)
-ampliconPool=sub("Pool", "p", ampliconPool) # different layout from pool, only keep pool number
-ampliconPool=sub("p", "", ampliconPool)
-ampliconPool=cbind(amplicon, ampliconPool)
+temp_id=1
+if (temp_id >= 2){
+  print("multiple primer pools")
+  # split the final column from the file in a new table ( this should be done in a nicer way though...)
+  amplicon = sub("(^.*_.*)_.*_.*", "\\1", ampliconName$ampliconName)
+  amplicon = sub("(^.*)_.*_.*", "\\1", amplicon) # rs genes have different layout
+  ampliconPool= sub("^.*_.*_(.*)_.*", "\\1", ampliconName$ampliconName)
+  ampliconPool= sub("^.*_(.*)_.*", "\\1", ampliconPool)
+  ampliconPool=sub("Pool", "p", ampliconPool) # different layout from pool, only keep pool number
+  ampliconPool=sub("p", "", ampliconPool)
+  ampliconPool=cbind(amplicon, ampliconPool)
+} else {
+  print("one primerpool")
+}
 
 
 ```
 
 
-
-```{r split.df.based.on.primer.pool, echo=FALSE, warning=FALSE}
+```{r split.df.based.on.primer.pool, echo=FALSE, warning=FALSE, eval=FALSE}
 
 
 # Merge median amplicon values with pool information of that amplicon ( 1 or 2) and create for each pool their own table
-
-bp_med_ampl=merge(bp_med_ampl, ampliconPool, by="amplicon")
-bp_med_ampl$overlapped=NULL
-bp_med_ampl_P1=bp_med_ampl[which(bp_med_ampl$ampliconPool=="1"),]
-bp_med_ampl_P2=bp_med_ampl[which(bp_med_ampl$ampliconPool=="2"),]
-
+if (temp_id >= 2){
+  bp_med_ampl=merge(bp_med_ampl, ampliconPool, by="amplicon")
+  bp_med_ampl$overlapped=NULL
+  bp_med_ampl_P1=bp_med_ampl[which(bp_med_ampl$ampliconPool=="1"),]
+  bp_med_ampl_P2=bp_med_ampl[which(bp_med_ampl$ampliconPool=="2"),]
+} else {
+  print("one primerpool")
+}
 
 # Maybe write if else statement here, when no different primer pools are present!!!!!!!!!! use e.g (length(unique(sort(ampliconPool[,2]))))
 
 ```
 
 
-WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
 
 
-```{r within_sample_normalization, echo=FALSE, warning=FALSE}
 
+```{r within_sample_normalization, echo=FALSE, warning=FALSE, eval=FALSE}
+#WITHIN SAMPLE AND BETWEEN SAMPLE NORMALIZATION OF AMPLICONS
 #-----------------------------------------------------
 # WITHIN SAMPLE NORMALIZATION OF AMPLICONS
 #-----------------------------------------------------
@@ -247,7 +436,7 @@ within.combine_pool1_2=na.omit(within.combine_pool1_2)                          
 ```
 
 
-```{r between_samples_normalization_1, echo=FALSE, warning=FALSE}
+```{r between_samples_normalization_1, echo=FALSE, warning=FALSE, eval=FALSE}
 
 #-----------------------------------------------------
 # BETWEEN SAMPLES NORMALIZATION OF AMPLICONS
@@ -325,7 +514,7 @@ log10.normalized.data=na.omit(log10.normalized.data) # rm NA (as a result from r
 ````
 
 
-```{r between_samples_normalization, echo=FALSE, warning=FALSE}
+```{r between_samples_normalization, echo=FALSE, warning=FALSE, eval=FALSE}
 
 
 
@@ -401,14 +590,15 @@ colnames(storeOrder)="OrderID"
 
 
 
-```{r, echo=FALSE, warning=FALSE}
+```{r, echo=FALSE, warning=FALSE, eval=FALSE}
 
 # create an unique id to merged the confidence interval data with this df. (didnt get it to work differently)
 normalized.data.quantsmooth$temp_id=paste(normalized.data.quantsmooth$sample, normalized.data.quantsmooth$gene, sep="_")
 
 CI=normalized.data.quantsmooth %>% group_by(gene) %>% 
-  summarize(mn=mean(quantsmooth),sd=sd(quantsmooth), LCI=mn+qnorm(0.025)*sd, UCI=mn+qnorm(0.975)*sd)
-#%>%
+  #summarize(mn=mean(as.double(quantsmooth)),sd=sd(as.double(quantsmooth)), LCI=mn+qnorm(0.025)*sd, UCI=mn+qnorm(0.975)*sd)
+  summarize(mn=mean(as.double(quantsmooth)),sd=sd(as.double(quantsmooth)), LCI=mn+qnorm(0.005)*sd, UCI=mn+qnorm(0.995)*sd)
+
   #mutate(se=sd/sqrt(n), LCI=med+qnorm(0.025)*se, UCI=med+qnorm(0.975)*se)
   #mutate(LCI=mn+qnorm(0.005)*sd,UCI=mn+qnorm(0.995)*sd)
  
@@ -427,42 +617,14 @@ normalized.data.quantsmooth$OrderID=NULL
 
 
 
-```{r, echo=FALSE, fig.width=18, fig.height=100, warning=FALSE}
-
-normalized.data.quantsmooth$amplicon = factor(normalized.data.quantsmooth$amplicon, levels = normalized.data.quantsmooth$amplicon)
-normalized.data.quantsmooth$gene = factor(normalized.data.quantsmooth$gene, levels = normalized.data.quantsmooth$gene)
-normalized.data.quantsmooth$ampliconPool = factor(normalized.data.quantsmooth$ampliconPool, levels = normalized.data.quantsmooth$ampliconPool)
 
 
 
-
-
-#normalized.data.quantsmooth_TEST=normalized.data.quantsmooth[grep("04230", normalized.data.quantsmooth$sample),]
-
-
-
-a = ggplot(normalized.data.quantsmooth, aes(x=amplicon, y=quantsmooth , color=gene, 
-                                                 shape=ifelse((quantsmooth >= LCI & quantsmooth <= UCI),"A", "B"))) + 
-  geom_point(size=3) +
-  scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "orange"),length.out=length(unique(normalized.data.quantsmooth$gene)))) +
-  scale_shape_manual(guide=FALSE, values=c(1, 8)) +   #define shapes
-  facet_wrap(~sample, ncol = 1)  +
-  theme_bw() +
-  theme(axis.text.x=element_text(angle=90, vjust = 0.6, size=8))
-plot(a)
-         
-
-
-
-
-```
-
-
-
-# The rest of the code was used in the previous analysis but currentlty not used/evaluated!!!
 
 
 ```{r call_within_between_normalization_functions, echo=FALSE, warning=FALSE, eval=FALSE}
+# The rest of the code was used in the previous analysis but currentlty not used/evaluated!!!
+
 
 # Function was used before we splitted the data in different primer pools.
 # Call the within sample and between samples normalization function. Normalization is done within a loop to repeat the normalization process n times
