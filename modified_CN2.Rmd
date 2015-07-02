@@ -239,7 +239,7 @@ print(unique(CI[which(CI$sample.consider=="discarded"),1]))
 Only samples with a stdev < 0.3 were included in determining the confidence interval per gene. 
 ```{r, echo=FALSE, fig.width=15, fig.height=20, warning=FALSE}
 
-# remove pool number from amplicon name (maybe do that more above??) (plotting needs group_by??)
+# remove pool number from amplicon name (maybe do that more above??) (plotting needs group_by??))
 #CI=CI %>% group_by(sample) %>% 
 #  mutate(ampl.new=sub("_p.*", "", amplicon))
 
