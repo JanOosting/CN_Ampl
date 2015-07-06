@@ -54,9 +54,11 @@ Using bedtools calculate per base coverage of all amplicons
 
 # commandline
 # -v at awk is added, not similar as dinas code above
-#amplFile=/home/wplugge/R/additional.pool/primerPool.sorted.primers.bed; 
-#mkdir per.base.coverage; 
-#for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1"_"$2"_"$3,$5,$6,$7}' >> new.base.coverage.panel_439.txt ; done;
+
+# amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
+# amplFile=/home/wplugge/R/additional.pool/nu_CHP2.primer.bed # pool 433, 438, 439, 
+
+#for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1,$2,$3,$4,$5,$6}' >> base.coverage.panel_453.txt ; done;
 ```
 
 
@@ -69,22 +71,21 @@ Using bedtools calculate per base coverage of all amplicons
 # PROCESSING FILES AND QUALITY CONTROL
 
 # Processing files retrieved after using bedtools coverage. Files contain per base pair coverage of all amplicons. Data from these files (of all   samples) will be merged into one table, which has the following structure:
-# amplicon                sample1 sample2
-# 10_89624270_89624359    140     144  
+
 # Furthermore, this step includes a quality control step where samples with a median coverage lower than 10 are excluded from further analysis
 #-----------------------------------------------------
 
 
-###!!!! Add cutoff value for samples!!!!!!!!!!!!!
 
 
-#input has to have this format:
-# sample -   genomic position -     ampl.name combined with pool -number coverage
-# 151110.bam chr1_42844195_42844317 rs7514030_p1                  886
+
+#pool 439
+#outputFileTable="/home/wplugge/R/additional.pool/439/new.439_CNV_analysis.txt"
+#pool.coverage=read.table("/home/wplugge/R/additional.pool/439/new.base.coverage.panel_439.txt")
 
 
-outputFileTable="/home/wplugge/R/additional.pool/439/new.439_CNV_analysis.txt"
-pool.coverage=read.table("/home/wplugge/R/additional.pool/439/new.base.coverage.panel_439.txt")
+outputFileTable="/home/wplugge/R/additional.pool/452/452_CNV_analysis.txt"
+pool.coverage=read.table("/home/wplugge/R/additional.pool/452/base.coverage.panel_452.txt")
 colnames(pool.coverage)=c("sample", "chr", "ampl.start", "ampl.stop", "amplicon", "index", "coverage")
 
 
@@ -100,8 +101,8 @@ colnames(pool.coverage)=c("sample", "chr", "ampl.start", "ampl.stop", "amplicon"
 # ADJUST COVERAGE OVERLAPPING AMPLICONS - STEP 2: IDENTIFY OVERLAPPING AMPLICONS & DIVIDE COVERAGE BY NUMBER OF AMPLICONS OVERLAPPING THAT POSITION
 #-----------------------------------------------------
 
-# This code needs to be checked with overlapping amplicon regions!!!!!!!!!!!!!!!!!!
 
+# Checked for overlapping amplicons as well. works
 # group by sample and genomic position to count the occurence of each position. number of times a position occurs is 
 
 pool.coverage = pool.coverage %>%  
@@ -112,10 +113,11 @@ pool.coverage = pool.coverage %>%
   mutate(ampl.median = median(as.numeric(corr.coverage))) %>%         # Calculate median corrected coverage of each ampl per sample
   select(sample, chr, ampl.start, ampl.stop, amplicon, ampl.median) %>%  # select columns for further usage
   unique() %>%                                             # Rm duplicated rows
-  #filter(!grepl("^AME", amplicon))
+  filter(!grepl("^AME", amplicon))%>%   
   filter(!grepl("^rs", amplicon)) %>%
   group_by(sample) %>% #part=Identify samples with a median amplicon coverage of 20 + Add 1 to coverage (for log transformation)
-  mutate(median.coverage=ifelse(median(ampl.median) < 20, "low_median_cov", "approved_cov"), ampl.median=ampl.median+1)
+  mutate(median.coverage=ifelse(median(ampl.median) < 20, "low_median_cov", "approved_cov"), ampl.median=ampl.median+1) 
+  
 
 # data used for plotting. first amplicon median is determined (from the per base coverage). Using this data the median of the sample
 # is determined. Since we added 1 to each coverage (for log10 transformation) i substract 1 from each value to get the original value
@@ -123,6 +125,9 @@ sample.median=pool.coverage %>% group_by(sample) %>%
   mutate(sample.median=median(ampl.median)-1) %>%
   select(sample, sample.median) %>%
   unique()
+
+print("Sample(s) discarded due to low median coverage:")
+print.data.frame(sample.median[which(sample.median$sample.median < 20),])
 
 # Within sample normalization, different primerpools are taken into account
 within.sample.normalization =  pool.coverage %>%
@@ -166,10 +171,15 @@ avg_stdev_complete = initial.between.sample.normalization %>%
   unique()  #%>%
   #filter(average.stdev>0.3) # samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median coverage between samples of that amplicon. These samples still will be normalized using the selected median
 
+
 avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > 0.3),]
+print("Sample(s) discarded due to high average stdev:")
+print.data.frame(avg_stdev)
 
 
-
+# HIER WAREN WE MEE BEZIG!!
+y_density=density(as.numeric(avg_stdev_complete$average.stdev))$y
+x_density=density(as.numeric(avg_stdev_complete$average.stdev))$x
 
 # samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median
 # coverage between samples of that amplicon. These samples still will be normalized using the selected median
@@ -200,6 +210,7 @@ between.sample.normalization = within.sample.normalization %>%
 
 
 
+
 # quanthsmooth
 data.smoothing= between.sample.normalization %>% 
     group_by(sample, gene) %>%
@@ -211,10 +222,13 @@ data.smoothing= between.sample.normalization %>%
 CI = data.smoothing %>% 
   #filter(!sample %in% sample.ex.norm$sample) %>% # samples with stdev > 3.0 are removed 
   group_by(gene, sample.consider) %>% 
+  #mutate(q_median=ifelse(sample.consider=="approved", median(as.numeric(quant.smooth)), as.numeric("NA"))) %>% # warning! (suppressWarnings()??)
   mutate(q_median=ifelse(sample.consider=="approved", median(as.numeric(quant.smooth)), as.numeric("NA"))) %>% # warning! (suppressWarnings()??)
-  mutate(q_mad=ifelse(sample.consider=="approved", mad(as.numeric(quant.smooth)), as.numeric("NA"))) %>% 
+  mutate(q_sd=ifelse(sample.consider=="approved", sd(as.numeric(quant.smooth)), as.numeric("NA"))) %>% 
+  #mutate(q_mad=ifelse(sample.consider=="approved", mad(as.numeric(quant.smooth)), as.numeric("NA"))) %>% 
   #mutate( q_median=median(as.numeric(quant.smooth)),q_mad=mad(as.numeric(quant.smooth)))  %>%
-  mutate(LCI=q_median+qnorm(0.005)*q_mad, UCI=q_median+qnorm(0.995)*q_mad) %>%
+  #mutate(LCI=q_median+qnorm(0.025)*q_sd, UCI=q_median+qnorm(0.975)*q_sd) %>%
+  mutate(LCI=q_median+qnorm(0.005)*q_sd, UCI=q_median+qnorm(0.995)*q_sd) %>%
   group_by(gene) %>%
   mutate(LCI=max(LCI, na.rm=TRUE), UCI=max(UCI, na.rm=TRUE))
          
@@ -239,22 +253,22 @@ print(unique(CI[which(CI$sample.consider=="discarded"),1]))
 Only samples with a stdev < 0.3 were included in determining the confidence interval per gene. 
 ```{r, echo=FALSE, fig.width=15, fig.height=20, warning=FALSE}
 
-# remove pool number from amplicon name (maybe do that more above??) (plotting needs group_by??))
-#CI=CI %>% group_by(sample) %>% 
-#  mutate(ampl.new=sub("_p.*", "", amplicon))
+
 
 CI$amplicon = factor(CI$amplicon, levels = CI$amplicon) # do no reorder labels
 CI$gene = factor(CI$gene, levels = CI$gene)
 
-
+facetcond=CI[which(CI$sample.consider=="discarded"),] # provides background color of discarded samples
 
 a=ggplot(CI, aes(x=amplicon, y=quant.smooth , color=gene, 
                                                  shape=ifelse((quant.smooth >= LCI & quant.smooth <= UCI),"A", "B"))) + 
-  geom_rect(aes(fill = sample.consider, color=c("pink", "red")), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 0.1) +
+  geom_rect(data = facetcond, fill = "gray92", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 0.1) +
   geom_point(size=1) +
+  #geom_point() +
   scale_color_manual(values=rep(c("dodgerblue4", "darkolivegreen4","darkorchid3", "orange"),length.out=length(unique(CI$gene))), guide=FALSE) +
   scale_shape_manual(guide=FALSE, values=c(16, 8)) +   #define shapes
-  facet_wrap(~sample, ncol = 1)  + #, scales="free_x")
+  #scale_size_manual(values=c(1,0.5)) +
+  facet_wrap(~sample, ncol = 1)+ # , scales="free_x") +
   theme_bw() +
   theme(axis.text.x=element_text(angle=90, vjust = 1, size=6))
 plot(a)
@@ -264,7 +278,7 @@ plot(a)
 
 ```
 
-# SAMPLE MEDIAN 
+sample median
 
 ```{r, echo=FALSE, fig.width=8, fig.height=8, warning=FALSE}
 
@@ -273,17 +287,14 @@ plot(density(as.numeric(sample.median$sample.median)), main="", xlab="Median sam
 ```
 
 
-# STANDARD DEVIATION (per gene(stdev/mean) => mean sample)
+average coefficient of variation (per gene(stdev/mean) => mean sample)
 
 ```{r, echo=FALSE, fig.width=8, fig.height=8, warning=FALSE}
 
-plot(density(as.numeric(avg_stdev_complete$average.stdev)), main="", xlab="Standard deviation")
+plot(density(as.numeric(avg_stdev_complete$average.stdev)), main="", xlab="average coefficient of variation (per gene(stdev/mean)/mean of sample)")
 
 
-# Add plot for stdev
-# see email of Dina for new data
-# something wrong with CI??
-# create html and show dina, gene is still not significant
+
 ```
 
 
