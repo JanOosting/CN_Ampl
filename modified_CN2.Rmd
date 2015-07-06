@@ -176,11 +176,19 @@ avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > 0.3),]
 print("Sample(s) discarded due to high average stdev:")
 print.data.frame(avg_stdev)
 
-
+plot(density(avg_stdev_complete$average.stdev))
 # HIER WAREN WE MEE BEZIG!!
-y_density=density(as.numeric(avg_stdev_complete$average.stdev))$y
+y_density=as.data.frame(density(as.numeric(avg_stdev_complete$average.stdev))$y) #
+colnames(y_density)="Y"
 x_density=density(as.numeric(avg_stdev_complete$average.stdev))$x
 
+
+for (i in 2:nrow(y_density)){ # first number cannot be compared with previous number
+  print(y_density$Y[i])
+  print(c("hallo", y_density$Y[i-1]))
+  
+  y_density$test[i]=ifelse(y_density$Y[i] >= y_density$Y[i-1], "A", "D" ) # equal to is considered ascending....
+}
 # samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median
 # coverage between samples of that amplicon. These samples still will be normalized using the selected median
 #sample.ex.norm=avg_stdev[which(avg_stdev$average.stdev >0.3),] # I know i can do this at the step above using filter, but for now i wanted to keep the whole list containing stdev for all samples
