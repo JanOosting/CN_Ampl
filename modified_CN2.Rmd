@@ -15,7 +15,7 @@ library(grid)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-
+library(gtools) # mixedorder => correct sorting
 library(quantsmooth)
 
 
@@ -56,7 +56,9 @@ Using bedtools calculate per base coverage of all amplicons
 # -v at awk is added, not similar as dinas code above
 
 # amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
-# amplFile=/home/wplugge/R/additional.pool/nu_CHP2.primer.bed # pool 433, 438, 439, 
+# amplFile=/home/wplugge/R/additional.pool/reformat_CHP-rmprimers.bed # pool 433, 438, 439, 452, 453
+# amplFile=/home/wplugge/R/additional.pool/alpha_reformat_CHP-rmprimers.bed
+
 
 #for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1,$2,$3,$4,$5,$6}' >> base.coverage.panel_453.txt ; done;
 ```
@@ -79,18 +81,16 @@ Using bedtools calculate per base coverage of all amplicons
 
 
 
-#pool 439
-#outputFileTable="/home/wplugge/R/additional.pool/439/new.439_CNV_analysis.txt"
-#pool.coverage=read.table("/home/wplugge/R/additional.pool/439/new.base.coverage.panel_439.txt")
 
-
-outputFileTable="/home/wplugge/R/additional.pool/452/452_CNV_analysis.txt"
-pool.coverage=read.table("/home/wplugge/R/additional.pool/452/base.coverage.panel_452.txt")
+outputFileTable="/home/wplugge/R/additional.pool/453/453_CNV_analysis.txt"
+#pool.coverage=read.table("/home/wplugge/R/additional.pool/452/base.coverage.panel_452.txt")
+pool.coverage=read.table("/home/wplugge/base.coverage.panel_453.txt")
 colnames(pool.coverage)=c("sample", "chr", "ampl.start", "ampl.stop", "amplicon", "index", "coverage")
 
-
+#test=pool.coverage[grep("")]
 
 ```
+
 
 
 
@@ -118,6 +118,7 @@ pool.coverage = pool.coverage %>%
   group_by(sample) %>% #part=Identify samples with a median amplicon coverage of 20 + Add 1 to coverage (for log transformation)
   mutate(median.coverage=ifelse(median(ampl.median) < 20, "low_median_cov", "approved_cov"), ampl.median=ampl.median+1) 
   
+
 
 # data used for plotting. first amplicon median is determined (from the per base coverage). Using this data the median of the sample
 # is determined. Since we added 1 to each coverage (for log10 transformation) i substract 1 from each value to get the original value
@@ -172,34 +173,72 @@ avg_stdev_complete = initial.between.sample.normalization %>%
   #filter(average.stdev>0.3) # samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median coverage between samples of that amplicon. These samples still will be normalized using the selected median
 
 
-avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > 0.3),]
-print("Sample(s) discarded due to high average stdev:")
-print.data.frame(avg_stdev)
+#avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > 0.3),]
+#print("Sample(s) discarded due to high average stdev:")
+#print.data.frame(avg_stdev)
 
-plot(density(avg_stdev_complete$average.stdev))
-# HIER WAREN WE MEE BEZIG!!
-y_density=as.data.frame(density(as.numeric(avg_stdev_complete$average.stdev))$y) #
+#plot(density(avg_stdev_complete$average.stdev))
+
+# Values density plot = y values is height of peak, x = average stdev
+y_density=as.data.frame(density(as.numeric(avg_stdev_complete$average.stdev))$y) 
+#y_density=density(as.numeric(avg_stdev_complete$average.stdev))$y
 colnames(y_density)="Y"
 x_density=density(as.numeric(avg_stdev_complete$average.stdev))$x
 
+#jan suggestion x_density[which(diff(diff(y_density)>0)==1)] see email. if values are +1 / -1 indicates an approximate position
+# where the peak goed from negative to positive (1) and positive to negative (-1)
+#http://stackoverflow.com/questions/13911486/the-diff-function
+# Diff vector is getting smaller each round!!
+#x_density[which(diff(diff(y_density)>0)==1)]
+
+
 
 for (i in 2:nrow(y_density)){ # first number cannot be compared with previous number
-  print(y_density$Y[i])
-  print(c("hallo", y_density$Y[i-1]))
-  
-  y_density$test[i]=ifelse(y_density$Y[i] >= y_density$Y[i-1], "A", "D" ) # equal to is considered ascending....
+  #print(c("previous", y_density$Y[i-1]))
+  #print(y_density$Y[i])
+  y_density$A_D_cending[i]=ifelse(y_density$Y[i] < y_density$Y[i-1], "D", "A") # equal to is considered ascending....
 }
-# samples that have a standard deviation (of the mean) bigger than 0.3 (our set cutoff) are not included in determining the median
+
+A_D_string=paste(y_density$A_D_cending[2:nrow(y_density)], collapse="" ) # miss first position (see above,no preceding position =NA)
+# Grep the positions where "DA" occurs. This marks the location where one peak ends and a new one starts
+ini_positions=gregexpr("DA", A_D_string, perl=TRUE) 
+#positions=gregexpr("DA",paste(y_density[2:nrow(y_density),2], collapse="" ),perl=TRUE)
+
+# Store only the positions that we need (gregexpr provides some additional stuff), followed by the addition of 1 to all these  numbers, since the first position is not accounted for as this number cannot be compared with a previous number
+positions=as.list(ini_positions[[1]][1:length(ini_positions[[1]])]+1) 
+# List with positions is used as index numbers to retrieve corresponding y_density values. To achieve this, a start position (1) and
+# end position (nrow(y_density)) are added to this list.
+positions=append(positions, 1, after=0) 
+positions=append(positions, nrow(y_density), after=length(positions)) # last position
+
+# Calculate the sum of y_density values for each peak to determine which peak is the largest.
+
+curve_sum=list()
+for(i in 2:length(positions)){
+  curve_sum[as.character(positions[[i]])]=sum(y_density$Y[(positions[[i-1]]+1):positions[[i]]])
+}
+
+# identify the peak with the biggerst area. == most samples have this range of average.stdev. other
+# peaks are considered outliers
+x_density_threshold=x_density[unlist(positions[which.max(curve_sum)+1])] # +1 because first pos is start of curve and added by us into the positions list so we do not want to include this number
+print("average standard deviation cut off:")
+print(x_density_threshold)
+
+
+avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > x_density_threshold ),]
+print("Sample(s) discarded due to high average stdev:")
+print.data.frame(avg_stdev)
+
+# samples that have a standard deviation (of the mean) bigger than the calculated threshold (x_density_threshold) are not included in determining the median
 # coverage between samples of that amplicon. These samples still will be normalized using the selected median
-#sample.ex.norm=avg_stdev[which(avg_stdev$average.stdev >0.3),] # I know i can do this at the step above using filter, but for now i wanted to keep the whole list containing stdev for all samples
-#print("The following samples were excluded:")
-#print.data.frame(avg_stdev)
 
 
 
 
-# Calculate the median of each amplicon of samples with a stdev <= 0.3. This median is used to do a between sample normalization of
-# amplicons and normalize data using values derived from approved samples. 
+
+
+# Calculate the median of each amplicon of samples with a stdev <= threshold. This median is used to do a between sample 
+# normalization of amplicons and normalize data using values derived from approved samples. 
 between.sample.normalization = within.sample.normalization %>% 
   # Add column that indicated which samples have a higher stdev than the set threshold of 3
   mutate(stdev.approved=ifelse(sample %in% avg_stdev$sample, "above_threshold", "approved_stdev")) %>%
@@ -238,8 +277,8 @@ CI = data.smoothing %>%
   #mutate(LCI=q_median+qnorm(0.025)*q_sd, UCI=q_median+qnorm(0.975)*q_sd) %>%
   mutate(LCI=q_median+qnorm(0.005)*q_sd, UCI=q_median+qnorm(0.995)*q_sd) %>%
   group_by(gene) %>%
-  mutate(LCI=max(LCI, na.rm=TRUE), UCI=max(UCI, na.rm=TRUE))
-         
+  mutate(LCI=max(LCI, na.rm=TRUE), UCI=max(UCI, na.rm=TRUE)) %>%
+  ungroup()
 
 
 
@@ -252,13 +291,13 @@ CNV.table=CI %>%
 
 write.table(CNV.table, outputFileTable, sep="\t", quote=FALSE, row.names=FALSE )
 
-print("The following samples were excluded:")
+print("Overview of all excluded samples:")
 print(unique(CI[which(CI$sample.consider=="discarded"),1]))
 
 ```
 
 
-Only samples with a stdev < 0.3 were included in determining the confidence interval per gene. 
+Only samples with a stdev < threshold were included in determining the confidence interval per gene. 
 ```{r, echo=FALSE, fig.width=15, fig.height=20, warning=FALSE}
 
 
