@@ -26,18 +26,28 @@ library(quantsmooth)
  CN Analysis
 -----------------------------------------------------
 Copy number variation analysis of amplicons    
-1) per base coverage of overlapping amplicon regions are divided by the number of overlapping amplicons     
-2) calculate per base median of an amplicon       
-3) divide amplicon value (as retrieved at step 2) by median sample      
-4) divide amplicon value (as retrieved at step 3) by the median amplicon value accross samples       
-5) median polishing -> repeat step 3 and 4        
+1) per base coverage of overlapping amplicon regions are divided by the number of overlapping
+amplicons     
+2) calculate per base median of an amplicon  
+3) divide amplicon value (as retrieved at step 2) by median sample    
+4) divide amplicon value (as retrieved at step 3) by the median amplicon value accross samples  
+(Samples with a median lower than 20 and/or have an average coefficient of variation higher than the threshold (determined by density plot values) are excluded in determining the median used for
+normalization)  
+5) log10 transformation  
+6) data smoothing  
+7) calculate confidence interval per gene for smoothed values  
+   
 
 
 
 
-Using bedtools calculate per base coverage of all amplicons   
+  
 
 ```{r computeCoverage, echo=FALSE}
+#-----------------------------------------------------
+#Using bedtools calculate per base coverage of all amplicons 
+#-----------------------------------------------------
+
 # File with amplicon regions
 # amplFile=sorted.unique.complete.PolypSeq-withAMPL.bed 
 
@@ -55,7 +65,7 @@ Using bedtools calculate per base coverage of all amplicons
 # amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
 # amplFile=/home/wplugge/R/additional.pool/reformat_CHP-rmprimers.bed # pool 433, 438, 439, 452, 453
 
-
+# This the correct commandline code!!!
 # sorting of the amplicons is alphabetical order takes a bit longer (-V = order the numbers correctly)
 # for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1,$2,$3,$4,$5,$6}' | sort -k 1,1 -k 5,5 -V >> base.coverage.panel_452.txt ; done;
 
@@ -84,9 +94,9 @@ Using bedtools calculate per base coverage of all amplicons
 
 
 
-#outputFileTable="/home/wplugge/R/additional.pool/453/453_CNV_analysis.txt" # Not necessary, overview table is also saved in html
-pool.coverage=read.table("/home/wplugge/R/additional.pool/452/base.coverage.panel_452.txt")
-#pool.coverage=read.table("/home/wplugge/R/additional.pool/453/base.coverage.panel_453.txt")
+#outputFileTable="/home/wplugge/R/additional.pool/436/436_CNV_analysis.txt" # Not necessary, overview table is also saved in html
+# Inputfile!!
+pool.coverage=read.table("/home/wplugge/R/additional.pool/449/base.coverage.panel_449.txt")
 colnames(pool.coverage)=c("sample", "chr", "ampl.start", "ampl.stop", "amplicon", "index", "coverage")
 
 
@@ -140,7 +150,13 @@ sample.median=pool.coverage %>% group_by(sample) %>%
   unique()
 
 print("Sample(s) discarded due to low median coverage:")
-print.data.frame(sample.median[which(sample.median$sample.median < 20),])
+if(nrow(sample.median[which(sample.median$sample.median < 20),])>0){
+  print.data.frame(sample.median[which(sample.median$sample.median < 20),])
+} else {
+  print("None")
+}
+
+#kable(sample.median[which(sample.median$sample.median < 20),], format = "markdown", align="l")
 
 ```
 
@@ -207,13 +223,16 @@ avg_stdev_complete = initial.between.sample.normalization %>%
   group_by(sample) %>%
   mutate(average.stdev=mean(as.numeric(vc.gene), na.rm=TRUE)) %>%
   select(sample, average.stdev) %>% 
-  unique() 
+  unique() %>% 
+  ungroup()
  
 
 
 # Values density plot = y values is height of peak, x = average stdev
 y_density=as.data.frame(density(as.numeric(avg_stdev_complete$average.stdev))$y)  
+
 colnames(y_density)="Y"
+#y_density=density(as.numeric(avg_stdev_complete$average.stdev))$y
 x_density=density(as.numeric(avg_stdev_complete$average.stdev))$x
 
 #OTHER OPTION: jan suggestion x_density[which(diff(diff(y_density)>0)==1)] see email. if values are +1 / -1 indicates an approximate position
@@ -239,28 +258,60 @@ ini_positions=gregexpr("DA", A_D_string, perl=TRUE)
 # Store only the positions that we need (gregexpr provides some additional stuff), followed by the addition of 1 to all these  numbers, since the first position is not accounted for as this number cannot be compared with a previous number
 positions=as.list(ini_positions[[1]][1:length(ini_positions[[1]])]+1) 
 
-# List with positions is used as index numbers to retrieve corresponding y_density values. To achieve this, a start position (1) and
-# end position (nrow(y_density)) are added to this list.
-positions=append(positions, 1, after=0) 
-positions=append(positions, nrow(y_density), after=length(positions)) # last position
 
-# Calculate the sum of y_density values for each peak to determine which peak is the largest.
-curve_sum=list()
-for(i in 2:length(positions)){
-  curve_sum[as.character(positions[[i]])]=sum(y_density$Y[(positions[[i-1]]+1):positions[[i]]])
+if(positions[1] == 0) {
+  x_density_threshold=0.3 
+} else {
+  y_density_values=list()
+  for(i in 1:length(positions)){
+    y_density_values[i]=y_density$Y[positions[[i]]]
+  }
+  x_index=unlist(positions[(which(y_density_values < 4)[1])])
+  x_density_threshold=x_density[x_index]
+  
 }
+  
 
-# identify the peak with the biggerst area. == most samples have this range of average.stdev. other
-# peaks are considered outliers
-x_density_threshold=x_density[unlist(positions[which.max(curve_sum)+1])] # +1 because first pos is start of curve and added by us into the positions list so we do not want to include this number
+
+
+
+
+
+
+
+#if(positions==0){
+#  x_density_threshold=0.3  
+#} else {
+#  # List with positions is used as index numbers to retrieve corresponding y_density values. To achieve this, a start position (1) #     and end position (nrow(y_density)) are added to this list.
+#  positions=append(positions, 1, after=0) 
+#  positions=append(positions, nrow(y_density), after=length(positions)) # last position
+
+#  # Calculate the sum of y_density values for each peak to determine which peak is the largest.
+#  curve_sum=list()
+#  for(i in 2:length(positions)){
+#    curve_sum[as.character(positions[[i]])]=sum(y_density$Y[(positions[[i-1]]+1):positions[[i]]])
+#  }
+
+#  # identify the peak with the biggerst area. == most samples have this range of average.stdev. other
+#  # peaks are considered outliers
+#  x_density_threshold=x_density[unlist(positions[which.max(curve_sum)+1])] # +1 because first pos is start of curve and added by us #into the positions list so we do not want to include this number
+#}
+
+
 print("average standard deviation cut off:")
 print(x_density_threshold)
+
 
 #Identify samples that have an average stdev higher than threshold.
 # samples that have a standard deviation (of the mean) higher than the calculated threshold (x_density_threshold) are not included in determining the median coverage between samples of that amplicon. These samples still will be normalized using the selected median
 avg_stdev=avg_stdev_complete[which(avg_stdev_complete$average.stdev > x_density_threshold ),]
 print("Sample(s) discarded due to high average stdev:")
-print.data.frame(avg_stdev)
+
+if(nrow(avg_stdev)> 0){
+  print.data.frame(avg_stdev)
+} else {
+  print("None")
+}
 
 
 ```
@@ -351,25 +402,6 @@ CI = CI %>%
 ```
 
 
-```{r print_result_table, echo=FALSE, warning=FALSE, results = 'asis'}
-# results = asis is for getting a nice output format of table
-
-#-----------------------------------------------------
-# Create table which provides overview of which amplicons are associated with (partial) deleted/amplified genes.
-# If the quantsmoothed amplicon value is lower than the final_LCI it's called a deletion. 
-# If the quantsmoothed amplicon value is higher than the final_UCI it's called an amplification 
-#-----------------------------------------------------
-CNV.table=CI %>% 
-  ungroup() %>%  # Actions above kept data grouped, not required now
-  mutate(CNV = ifelse(quant.smooth < final_LCI, "deletion", ifelse(quant.smooth > final_UCI, "amplification","NA"))) %>%
-  filter(!CNV=="NA") %>%
-  select(sample, amplicon, sample.consider, quant.smooth, final_LCI, final_UCI, CNV)
-
-#write.table(CNV.table, outputFileTable, sep="\t", quote=FALSE, row.names=FALSE )
-kable(CNV.table, format = "markdown") # write table to html file 
-#kable(CNV.table, format = "html") # write table to html file 
-```
-
 
 ```{r gene_name_for_plotting_significant_ampl, echo=FALSE, warning=FALSE}
 
@@ -424,7 +456,7 @@ a=ggplot(CI, aes(x=amplicon, y=quant.smooth , color=gene,
   #geom_text(data=subset(CI, quant.smooth > final_UCI) , aes(label=gene) , size=4) +
 
   #geom_text(data=subset(my.data, count>10), aes(y=pos, label=count), size=4)
-  coord_cartesian(ylim = c(-1, 1.5)) +
+  coord_cartesian(ylim = c(-2, 2)) +  # SET Y-LIMITS!!
   facet_wrap(~sample, ncol = 1)+ # , scales="free_x") +
   theme_bw() +
   theme(axis.text.x=element_text(angle=90, vjust = 1, size=6))
@@ -437,23 +469,49 @@ plot(a)
 
 ```
 
+```{r print_result_table, echo=FALSE, warning=FALSE}
+# results = asis is for getting a nice output format of table
+
+#-----------------------------------------------------
+# Create table which provides overview of which amplicons are associated with (partial) deleted/amplified genes.
+# If the quantsmoothed amplicon value is lower than the final_LCI it's called a deletion. 
+# If the quantsmoothed amplicon value is higher than the final_UCI it's called an amplification 
+#-----------------------------------------------------
+CNV.table=CI %>% 
+  ungroup() %>%  # Actions above kept data grouped, not required now
+  mutate(CNV = ifelse(quant.smooth < final_LCI, "deletion", ifelse(quant.smooth > final_UCI, "amplification","NA"))) %>%
+  filter(!CNV=="NA") %>%
+  filter(!sample.consider=="discarded") %>%
+  select(sample, amplicon, CNV)
+
+#write.table(CNV.table, outputFileTable, sep="\t", quote=FALSE, row.names=FALSE )
+print.data.frame(CNV.table)
+```
+
+```{r table, results='asis', eval=FALSE, echo=FALSE}
+# test to print nicer tables..
+#library(xtable) 
+#print(xtable(head(CNV.table)), type='html', include.rownames=FALSE) 
+#kable(CNV.table, format = "markdown") # write table to html file 
+#kable(CNV.table, format = "html") # write table to html file 
+``` 
 Sample median
 
-```{r, echo=FALSE, fig.width=8, fig.height=8, warning=FALSE}
+```{r, echo=FALSE, fig.width=5, fig.height=4, warning=FALSE}
 #-----------------------------------------------------
 # Density plot of sample median
 #-----------------------------------------------------
-plot(density(as.numeric(sample.median$sample.median)), main="", xlab="Median sample coverage")
+plot(density(as.numeric(sample.median$sample.median)), main="", xlab="Median sample coverage", cex.lab=0.75)
 
 ```
 
 Average coefficient of variation (per gene(stdev/mean) => mean sample)
 
-```{r, echo=FALSE, fig.width=8, fig.height=8, warning=FALSE}
+```{r, echo=FALSE, fig.width=5, fig.height=4, warning=FALSE}
 #-----------------------------------------------------
 #average coefficient of variation (per gene(stdev/mean) => mean sample)
 #-----------------------------------------------------
-plot(density(as.numeric(avg_stdev_complete$average.stdev)), main="", xlab="average coefficient of variation (per gene(stdev/mean)/mean of sample)")
+plot(density(as.numeric(avg_stdev_complete$average.stdev)), main="", xlab="Average coefficient of variation (per gene(stdev/mean)/mean of sample)", cex.lab=0.75)
 
 
 
