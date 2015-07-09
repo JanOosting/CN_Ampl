@@ -59,7 +59,7 @@ normalization)
 
 
 
-# commandline
+# commandline 
 # -v at awk is added, not similar as dinas code above
 
 # amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
