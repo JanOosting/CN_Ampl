@@ -59,7 +59,7 @@ normalization)
 
 
 
-# commandline
+# commandline  
 # -v at awk is added, not similar as dinas code above
 
 # amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
@@ -68,6 +68,8 @@ normalization)
 # This the correct commandline code!!!
 # sorting of the amplicons is alphabetical order takes a bit longer (-V = order the numbers correctly)
 # for fileName in *.bam; do coverageBed -abam "$fileName" -b $amplFile -d |  awk -v x="$fileName" '{print x,$1,$2,$3,$4,$5,$6}' | sort -k 1,1 -k 5,5 -V >> base.coverage.panel_452.txt ; done;
+
+# WENDY:Pool 4 and 5 are not done using this code (primerfile as chr and bam files probably not!!??)
 
 ```
 
