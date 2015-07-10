@@ -59,7 +59,7 @@ normalization)
 
 
 
-# commandline  
+# commandline 
 # -v at awk is added, not similar as dinas code above
 
 # amplFile=/home/wplugge/R/additional.pool/449/BRCA-rmprimers.bed # BRACA pool
@@ -261,6 +261,9 @@ ini_positions=gregexpr("DA", A_D_string, perl=TRUE)
 positions=as.list(ini_positions[[1]][1:length(ini_positions[[1]])]+1) 
 
 
+# If there is only one peak in the density plot, used the default average coefficient of variation value of 3, 
+# else check for each of the identified positions (where the transition from descending to ascending occurs.) the corresponding Y-value.
+# If the Y-value is higher than four, that following peak is not considerd an outlier peak (sometimes you'll have a dimpel in a large peak and you don't want that the be the cut-off value). The average coefficient of variation is extracted for the first position that has an y-density value < 4 and used as a threshold. Samples with a higher verage coefficient of variation are excluded in determing the normalization factor between samples (determining the median accros samples)
 if(positions[1] == 0) {
   x_density_threshold=0.3 
 } else {
@@ -276,28 +279,6 @@ if(positions[1] == 0) {
 
 
 
-
-
-
-
-
-#if(positions==0){
-#  x_density_threshold=0.3  
-#} else {
-#  # List with positions is used as index numbers to retrieve corresponding y_density values. To achieve this, a start position (1) #     and end position (nrow(y_density)) are added to this list.
-#  positions=append(positions, 1, after=0) 
-#  positions=append(positions, nrow(y_density), after=length(positions)) # last position
-
-#  # Calculate the sum of y_density values for each peak to determine which peak is the largest.
-#  curve_sum=list()
-#  for(i in 2:length(positions)){
-#    curve_sum[as.character(positions[[i]])]=sum(y_density$Y[(positions[[i-1]]+1):positions[[i]]])
-#  }
-
-#  # identify the peak with the biggerst area. == most samples have this range of average.stdev. other
-#  # peaks are considered outliers
-#  x_density_threshold=x_density[unlist(positions[which.max(curve_sum)+1])] # +1 because first pos is start of curve and added by us #into the positions list so we do not want to include this number
-#}
 
 
 print("average standard deviation cut off:")
